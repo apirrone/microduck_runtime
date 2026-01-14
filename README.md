@@ -2,6 +2,36 @@
 
 A performant Rust runtime for the Microduck robot, designed to run on Raspberry Pi Zero 2W with Dynamixel XL330 motors.
 
+## Installation
+
+### Quick Install (Raspberry Pi)
+
+On your Raspberry Pi Zero 2W, run:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/OWNER/microduck_runtime/main/install.sh | bash
+```
+
+Replace `OWNER` with your GitHub username.
+
+### From Release
+
+Download the latest release from the [Releases page](https://github.com/OWNER/microduck_runtime/releases) and extract:
+
+```bash
+tar xzf microduck_runtime-aarch64-linux.tar.gz
+sudo mv microduck_runtime /usr/local/bin/
+```
+
+### From Source
+
+```bash
+git clone https://github.com/OWNER/microduck_runtime
+cd microduck_runtime
+cargo build --release
+sudo cp target/release/microduck_runtime /usr/local/bin/
+```
+
 ## Features
 
 - **Motor Control**: Interfaces with 14 Dynamixel XL330 motors using [rustypot](https://github.com/pollen-robotics/rustypot)
@@ -311,6 +341,40 @@ This matches the Python implementation from `~/Rhoban/bam/bam/xl330/record.py`.
 - `ort` - ONNX Runtime bindings
 - `anyhow` - Error handling
 - `ctrlc` - Graceful shutdown
+
+## Creating Releases
+
+### First-Time Setup
+
+Before creating your first release:
+
+1. **Replace `OWNER` in `install.sh`** with your GitHub username
+2. **Update README.md** URLs with your GitHub username
+3. **Enable GitHub Actions** in repository settings (Settings > Actions > General > Workflow permissions: "Read and write permissions")
+
+See [SETUP_GITHUB.md](SETUP_GITHUB.md) for detailed setup instructions.
+
+### Creating a Release
+
+To create a new release with automatic ARM64 builds:
+
+1. **Tag a new version:**
+   ```bash
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
+
+2. **GitHub Actions will automatically:**
+   - Cross-compile for ARM64 (Raspberry Pi Zero 2W)
+   - Create a release with the binary
+   - Generate release notes
+
+3. **Users can then install with:**
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/OWNER/microduck_runtime/main/install.sh | bash
+   ```
+
+The CI workflow is in `.github/workflows/release.yml` and triggers on any tag starting with `v`.
 
 ## License
 

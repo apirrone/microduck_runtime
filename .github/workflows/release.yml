@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build for Raspberry Pi
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build for Raspberry Pi Zero 2W (ARM64)
+        run: cross build --release --target aarch64-unknown-linux-gnu
+
+      - name: Prepare binary
+        run: |
+          mkdir -p dist
+          cp target/aarch64-unknown-linux-gnu/release/microduck_runtime dist/
+          cd dist
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime
+          cd ..
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/microduck_runtime-aarch64-linux.tar.gz
+          body: |
+            ## Microduck Runtime ${{ github.ref_name }}
+
+            Cross-compiled binary for Raspberry Pi Zero 2W (ARM64).
+
+            ### Installation
+
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+            ```
+
+            Or download and extract manually:
+            ```bash
+            tar xzf microduck_runtime-aarch64-linux.tar.gz
+            sudo mv microduck_runtime /usr/local/bin/
+            ```
+
+            ### Usage
+
+            ```bash
+            microduck_runtime --help
+            microduck_runtime --dummy
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
