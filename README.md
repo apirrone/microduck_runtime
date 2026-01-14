@@ -341,6 +341,9 @@ This matches the Python implementation from `~/Rhoban/bam/bam/xl330/record.py`.
 - `ort` - ONNX Runtime bindings
 - `anyhow` - Error handling
 - `ctrlc` - Graceful shutdown
+- `openssl` (vendored) - For cross-compilation compatibility
+
+**Note**: We use vendored OpenSSL (`features = ["vendored"]`) to enable cross-compilation for ARM64. This compiles OpenSSL from source during the build.
 
 ## Creating Releases
 

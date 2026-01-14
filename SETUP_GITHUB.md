@@ -75,8 +75,9 @@ Check the Actions tab on GitHub:
 - `https://github.com/OWNER/microduck_runtime/actions`
 
 Common issues:
-- Permissions: Make sure workflow has write permissions (Settings > Actions > General > Workflow permissions)
-- Cross-compilation: The workflow uses `cross` which requires Docker
+- **Permissions**: Make sure workflow has write permissions (Settings > Actions > General > Workflow permissions)
+- **Cross-compilation**: The workflow uses `cross` which requires Docker
+- **OpenSSL errors**: We use `openssl = { version = "0.10", features = ["vendored"] }` in Cargo.toml to compile OpenSSL from source during cross-compilation. This avoids missing OpenSSL development libraries in the cross-compilation environment.
 
 ### Binary Not in Release
 
