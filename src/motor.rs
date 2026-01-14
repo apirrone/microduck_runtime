@@ -74,7 +74,7 @@ impl MotorController {
     pub fn new(port: &str, baudrate: u32) -> Result<Self> {
         // Open serial port
         let serial_port = serialport::new(port, baudrate)
-            .timeout(Duration::from_millis(10))
+            .timeout(Duration::from_millis(100))
             .open()
             .context("Failed to open serial port")?;
 
