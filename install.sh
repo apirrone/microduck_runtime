@@ -10,7 +10,7 @@ NC='\033[0m' # No Color
 
 # Configuration
 # Set via environment variable or use default
-REPO="${MICRODUCK_REPO:-OWNER/microduck_runtime}"  # TODO: Replace OWNER with your GitHub username
+REPO="${MICRODUCK_REPO:-apirrone/microduck_runtime}"
 BINARY_NAME="microduck_runtime"
 INSTALL_DIR="/usr/local/bin"
 
