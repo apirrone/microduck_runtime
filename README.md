@@ -9,14 +9,14 @@ A performant Rust runtime for the Microduck robot, designed to run on Raspberry 
 On your Raspberry Pi Zero 2W, run:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/OWNER/microduck_runtime/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash
 ```
 
-Replace `OWNER` with your GitHub username.
+Replace `apirrone` with your GitHub username.
 
 ### From Release
 
-Download the latest release from the [Releases page](https://github.com/OWNER/microduck_runtime/releases) and extract:
+Download the latest release from the [Releases page](https://github.com/apirrone/microduck_runtime/releases) and extract:
 
 ```bash
 tar xzf microduck_runtime-aarch64-linux.tar.gz
@@ -26,7 +26,7 @@ sudo mv microduck_runtime /usr/local/bin/
 ### From Source
 
 ```bash
-git clone https://github.com/OWNER/microduck_runtime
+git clone https://github.com/apirrone/microduck_runtime
 cd microduck_runtime
 cargo build --release
 sudo cp target/release/microduck_runtime /usr/local/bin/
@@ -351,7 +351,7 @@ This matches the Python implementation from `~/Rhoban/bam/bam/xl330/record.py`.
 
 Before creating your first release:
 
-1. **Replace `OWNER` in `install.sh`** with your GitHub username
+1. **Replace `apirrone` in `install.sh`** with your GitHub username
 2. **Update README.md** URLs with your GitHub username
 3. **Enable GitHub Actions** in repository settings (Settings > Actions > General > Workflow permissions: "Read and write permissions")
 
@@ -374,7 +374,7 @@ To create a new release with automatic ARM64 builds:
 
 3. **Users can then install with:**
    ```bash
-   curl -sSL https://raw.githubusercontent.com/OWNER/microduck_runtime/main/install.sh | bash
+   curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash
    ```
 
 The CI workflow is in `.github/workflows/release.yml` and triggers on any tag starting with `v`.
