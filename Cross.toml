@@ -1,5 +1,6 @@
 [target.aarch64-unknown-linux-gnu]
 pre-build = [
     "dpkg --add-architecture arm64",
-    "apt-get update && apt-get install -y libssl-dev pkg-config libudev-dev:arm64"
+    "apt-get update && apt-get install -y libssl-dev pkg-config libudev-dev:arm64",
+    "mkdir -p /.cache && chmod 777 /.cache"
 ]

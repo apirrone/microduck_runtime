@@ -31,6 +31,8 @@ jobs:
           tool: cross
 
       - name: Build for Raspberry Pi Zero 2W (ARM64)
+        env:
+          CARGO_HOME: /tmp/cargo
         run: cross build --release --target aarch64-unknown-linux-gnu
 
       - name: Prepare binary
