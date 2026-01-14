@@ -24,7 +24,7 @@ struct Args {
     baudrate: u32,
 
     /// Control loop frequency in Hz
-    #[arg(short, long, default_value_t = 100)]
+    #[arg(short, long, default_value_t = 50)]
     freq: u32,
 
     /// Use dummy policy (always outputs zeros) for testing
@@ -34,6 +34,18 @@ struct Args {
     /// Path to ONNX model file (ignored if --dummy is set)
     #[arg(short, long)]
     model: Option<String>,
+
+    /// Position P gain for motors
+    #[arg(long, default_value_t = 400)]
+    kp: u16,
+
+    /// Position I gain for motors
+    #[arg(long, default_value_t = 0)]
+    ki: u16,
+
+    /// Position D gain for motors
+    #[arg(long, default_value_t = 0)]
+    kd: u16,
 }
 
 
@@ -43,6 +55,7 @@ struct Runtime {
     imu_controller: ImuController,
     policy: Policy,
     control_freq: u32,
+    pid_gains: (u16, u16, u16), // (kP, kI, kD)
     last_action: [f32; NUM_MOTORS],
     command: [f64; 3],
 }
@@ -79,20 +92,27 @@ impl Runtime {
             imu_controller,
             policy,
             control_freq: args.freq,
+            pid_gains: (args.kp, args.ki, args.kd),
             last_action: [0.0; NUM_MOTORS],
             command: [0.0; 3],
         })
     }
 
-    /// Initialize motors (enable torque, set to initial positions)
+    /// Initialize motors (enable torque, set PID gains, set to initial positions)
     fn initialize_motors(&mut self) -> Result<()> {
         println!("Initializing motors...");
+
+        // Set PID gains
+        let (kp, ki, kd) = self.pid_gains;
+        println!("Setting PID gains: kP={}, kI={}, kD={}", kp, ki, kd);
+        self.motor_controller.set_pid_gains(kp, ki, kd)
+            .context("Failed to set PID gains")?;
 
         // Enable torque on all motors
         self.motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
 
-        println!("✓ Motors initialized and torque enabled");
+        println!("✓ Motors initialized with PID gains and torque enabled");
         Ok(())
     }
 
@@ -158,11 +178,21 @@ impl Runtime {
             // Print statistics every second
             if iteration % self.control_freq as u64 == 0 {
                 let avg_time = total_time / iteration as u32;
+
+                // Read leg currents
+                let currents_result = self.motor_controller.read_leg_currents();
+                let current_str = match currents_result {
+                    Ok((left, right)) => format!("Left: {:.0} mA, Right: {:.0} mA, Total: {:.0} mA",
+                                                left, right, left + right),
+                    Err(_) => "Current read failed".to_string(),
+                };
+
                 println!(
-                    "Running: {} iterations, avg loop time: {:.2} ms ({:.1}% of target)",
+                    "Running: {} iterations, avg loop time: {:.2} ms ({:.1}% of target) | Leg currents: {}",
                     iteration,
                     avg_time.as_secs_f64() * 1000.0,
-                    (avg_time.as_secs_f64() / dt.as_secs_f64()) * 100.0
+                    (avg_time.as_secs_f64() / dt.as_secs_f64()) * 100.0,
+                    current_str
                 );
             }
 

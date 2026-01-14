@@ -124,6 +124,39 @@ impl MotorController {
         }
         Ok(())
     }
+
+    /// Read current from all motors and return total current for legs (in mA)
+    /// Returns (left_leg_current_mA, right_leg_current_mA)
+    pub fn read_leg_currents(&mut self) -> Result<(f64, f64)> {
+        // Sync read present current (in mA)
+        let currents = self.controller
+            .sync_read_present_current(&MOTOR_IDS)
+            .map_err(|e| anyhow::anyhow!("Failed to read currents: {}", e))?;
+
+        // Sum left leg currents (indices 0-4: IDs 20-24)
+        let left_leg_current: f64 = currents[0..5].iter().map(|&c| (c as f64).abs()).sum();
+
+        // Sum right leg currents (indices 9-13: IDs 10-14)
+        let right_leg_current: f64 = currents[9..14].iter().map(|&c| (c as f64).abs()).sum();
+
+        Ok((left_leg_current, right_leg_current))
+    }
+
+    /// Set PID gains for all motors
+    pub fn set_pid_gains(&mut self, kp: u16, ki: u16, kd: u16) -> Result<()> {
+        for &id in &MOTOR_IDS {
+            self.controller
+                .write_position_p_gain(id, kp)
+                .map_err(|e| anyhow::anyhow!("Failed to set P gain for motor {}: {}", id, e))?;
+            self.controller
+                .write_position_i_gain(id, ki)
+                .map_err(|e| anyhow::anyhow!("Failed to set I gain for motor {}: {}", id, e))?;
+            self.controller
+                .write_position_d_gain(id, kd)
+                .map_err(|e| anyhow::anyhow!("Failed to set D gain for motor {}: {}", id, e))?;
+        }
+        Ok(())
+    }
 }
 
 /// Convert raw velocity value to rad/s

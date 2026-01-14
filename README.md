@@ -78,9 +78,14 @@ cargo run --release -- --help
 # Basic options
 --port <PORT>          Serial port for motor communication [default: /dev/ttyUSB0]
 --baudrate <BAUDRATE>  Motor communication baudrate [default: 1000000]
---freq <FREQ>          Control loop frequency in Hz [default: 100]
+--freq <FREQ>          Control loop frequency in Hz [default: 50]
 --dummy                Use dummy policy (always outputs zeros) for testing
 --model <MODEL>        Path to ONNX model file
+
+# PID tuning options
+--kp <KP>              Position P gain for motors [default: 400]
+--ki <KI>              Position I gain for motors [default: 0]
+--kd <KD>              Position D gain for motors [default: 0]
 ```
 
 **Motor IDs and Ordering**:
@@ -126,13 +131,16 @@ sudo chmod 666 /dev/ttyUSB0  # Grant permissions (or run as root)
 cargo run --release -- --dummy
 
 # Run with custom port and frequency
-cargo run --release -- --dummy --port /dev/ttyACM0 --freq 50
+cargo run --release -- --dummy --port /dev/ttyACM0 --freq 100
+
+# Run with custom PID gains
+cargo run --release -- --dummy --kp 600 --kd 30
 
 # Run with ONNX model (when you have one)
 cargo run --release -- --model /path/to/model.onnx
 
 # Run with ONNX model and custom settings
-cargo run --release -- --model policy.onnx --freq 200 --baudrate 1000000
+cargo run --release -- --model policy.onnx --freq 200 --kp 500
 ```
 
 The runtime will:
@@ -141,7 +149,9 @@ The runtime will:
 3. Load policy (dummy or ONNX)
 4. Enable torque on all motors
 5. Start the control loop at specified Hz
-6. Print statistics every second
+6. Print statistics every second including:
+   - Loop timing performance
+   - Leg current consumption (left, right, and total in mA)
 
 Press Ctrl+C to safely shutdown. The runtime will:
 - Detect the Ctrl+C signal
@@ -156,9 +166,75 @@ The shutdown should take less than 1 second.
 - Run a separate command to disable torque
 - Modify the `shutdown()` method to call `set_torque_enable(false)`
 
+## PID Tuning
+
+The runtime allows you to adjust PID gains for motor position control:
+
+```bash
+# Test with different P gain
+cargo run --release -- --dummy --kp 800
+
+# Test with softer control
+cargo run --release -- --dummy --kp 200
+
+# Add some damping with D gain
+cargo run --release -- --dummy --kp 400 --kd 50
+```
+
+**Default PID values:**
+- **kP = 400**: Proportional gain (stiffness)
+- **kI = 0**: Integral gain (usually not needed)
+- **kD = 0**: Derivative gain (damping)
+
+**Effect of gains:**
+- **Higher kP**: Stiffer, more responsive, but can oscillate or overshoot
+- **Lower kP**: Softer, smoother, but slower response
+- **kD**: Adds damping to reduce oscillations
+- **kI**: Corrects steady-state error (rarely needed for position control)
+
+The PID gains are applied to all 14 motors during initialization.
+
+**Tips for tuning:**
+1. Start with kP=400 (default) and observe the squat motion
+2. If motors oscillate or shake, reduce kP or add kD
+3. If response is too slow, increase kP
+4. Monitor current consumption - higher gains = higher current
+5. The squat test is ideal for tuning as it exercises the full range of motion
+
 ### Testing Before Training
 
-Use the `--dummy` flag to test your hardware setup without a trained policy. The dummy policy always outputs zero offsets, so motors will maintain their default positions.
+Use the `--dummy` flag to test your hardware setup without a trained policy. The dummy policy generates a **squatting motion** to test the legs:
+
+**Squat Motion Parameters:**
+- Frequency: 0.5 Hz (one squat every 2 seconds)
+- Amplitude: 0.2 rad for hip pitch and ankle
+- Amplitude: 0.4 rad for knees (2x amplitude)
+- Both legs move in sync
+
+This allows you to verify:
+- Motor communication is working
+- Default positions are correct
+- Motor orientations match expectations
+- Legs can perform coordinated motion
+
+### Current Monitoring
+
+The runtime automatically monitors leg current consumption and displays it every second:
+
+```
+Running: 100 iterations, avg loop time: 8.45 ms (84.5% of target) | Leg currents: Left: 245 mA, Right: 238 mA, Total: 483 mA
+```
+
+**Current measurements include:**
+- **Left leg**: Sum of absolute currents for motors 20-24 (5 motors)
+- **Right leg**: Sum of absolute currents for motors 10-14 (5 motors)
+- **Total**: Combined current for all leg motors (excludes neck/head)
+
+This is useful for:
+- Detecting mechanical issues (unusually high current)
+- Monitoring power consumption
+- Validating smooth motion (current should vary smoothly during squats)
+- Comparing left/right leg balance
 
 ## Adding ONNX Policy
 
@@ -214,9 +290,10 @@ impl ImuController {
 
 For Raspberry Pi Zero 2W:
 - Using sync read/write for efficient communication with multiple motors
-- 100 Hz control loop (10ms per iteration)
+- 50 Hz control loop by default (20ms per iteration)
 - Release build with optimizations enabled
 - ONNX Runtime configured with limited threads
+- Control frequency can be adjusted via `--freq` flag (e.g., 25-100 Hz)
 
 ## Conversion Functions
 
@@ -245,14 +322,14 @@ Same as your project.
    ```bash
    cargo run --release -- --dummy
    ```
-   Motors should initialize at default position and stay there.
+   The robot should initialize at default position and start doing small squats at 0.5 Hz.
 
 2. **Adjust Default Position** - Update `DEFAULT_POSITION` in `src/motor.rs` to match your robot's stance.
 
 3. **Test at Different Frequencies**:
    ```bash
-   cargo run --release -- --dummy --freq 50   # Lower freq for testing
-   cargo run --release -- --dummy --freq 200  # Higher freq for performance
+   cargo run --release -- --dummy --freq 25   # Lower freq for testing
+   cargo run --release -- --dummy --freq 100  # Higher freq for performance
    ```
 
 4. **Deploy Trained Policy** - Once you have an ONNX model:

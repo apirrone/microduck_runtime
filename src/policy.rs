@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crate::motor::NUM_MOTORS;
 use crate::observation::Observation;
+use std::time::Instant;
 
 /// Policy mode
 pub enum PolicyMode {
@@ -14,15 +15,17 @@ pub enum PolicyMode {
 /// Policy inference engine using ONNX Runtime
 pub struct Policy {
     mode: PolicyMode,
+    start_time: Instant,
     // TODO: Add ONNX session when model is ready
     // session: ort::Session,
 }
 
 impl Policy {
-    /// Create a new dummy policy that always outputs zeros
+    /// Create a new dummy policy that generates squatting motion
     pub fn new_dummy() -> Result<Self> {
         Ok(Self {
             mode: PolicyMode::Dummy,
+            start_time: Instant::now(),
         })
     }
 
@@ -42,6 +45,7 @@ impl Policy {
     ///         .commit_from_file(model_path)?;
     ///     Ok(Self {
     ///         mode: PolicyMode::Onnx,
+    ///         start_time: Instant::now(),
     ///         session
     ///     })
     /// }
@@ -50,6 +54,7 @@ impl Policy {
     pub fn new_onnx(_model_path: &str) -> Result<Self> {
         Ok(Self {
             mode: PolicyMode::Onnx,
+            start_time: Instant::now(),
         })
     }
 
@@ -63,8 +68,29 @@ impl Policy {
     pub fn infer(&self, _observation: &Observation) -> Result<[f32; NUM_MOTORS]> {
         match self.mode {
             PolicyMode::Dummy => {
-                // Dummy policy: always return zero actions
-                Ok([0.0; NUM_MOTORS])
+                // Dummy policy: generate squatting motion
+                // Frequency: 0.5 Hz, Amplitude: 0.2 rad (hip_pitch, ankle), 0.4 rad (knee)
+                let elapsed = self.start_time.elapsed().as_secs_f32();
+                let freq = 0.5; // Hz
+                let amplitude = 0.2; // radians
+                let knee_amplitude = 0.4; // 2x amplitude for knees
+
+                // sin(2*pi*f*t)
+                let phase = (2.0 * std::f32::consts::PI * freq * elapsed).sin();
+
+                let mut actions = [0.0f32; NUM_MOTORS];
+
+                // Left leg
+                actions[2] = amplitude * phase;         // left_hip_pitch (increases when squatting)
+                actions[3] = -knee_amplitude * phase;   // left_knee (decreases when squatting)
+                actions[4] = amplitude * phase;         // left_ankle (increases when squatting)
+
+                // Right leg (mirrors left leg due to motor orientations)
+                actions[11] = -amplitude * phase;       // right_hip_pitch (decreases when squatting)
+                actions[12] = knee_amplitude * phase;   // right_knee (increases when squatting)
+                actions[13] = -amplitude * phase;       // right_ankle (decreases when squatting)
+
+                Ok(actions)
             }
             PolicyMode::Onnx => {
                 // TODO: Implement actual ONNX inference:
@@ -93,7 +119,28 @@ mod tests {
         let action = policy.infer(&obs).unwrap();
 
         assert_eq!(action.len(), NUM_MOTORS);
-        // Dummy policy should always return zeros
-        assert!(action.iter().all(|&x| x == 0.0));
+
+        // Dummy policy generates squatting motion, so not all zeros
+        // Just check that leg joints have non-zero values at some point
+        // (at t=0, sin(0)=0, so we might get zeros initially)
+    }
+
+    #[test]
+    fn test_dummy_policy_squat_motion() {
+        use std::thread;
+        use std::time::Duration;
+
+        let policy = Policy::new_dummy().unwrap();
+        let obs = Observation::default();
+
+        // Wait a bit so we're not at t=0
+        thread::sleep(Duration::from_millis(100));
+
+        let action = policy.infer(&obs).unwrap();
+
+        // Check that leg joints have some motion (not all zeros)
+        let has_motion = action[2] != 0.0 || action[3] != 0.0 || action[4] != 0.0 ||
+                        action[11] != 0.0 || action[12] != 0.0 || action[13] != 0.0;
+        assert!(has_motion, "Dummy policy should generate squat motion");
     }
 }
