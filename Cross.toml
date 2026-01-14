@@ -1,4 +1,10 @@
 [target.aarch64-unknown-linux-gnu]
 pre-build = [
-    "apt-get update && apt-get install -y perl make"
+    "apt-get update && apt-get install -y perl make gcc"
+]
+
+[build.env]
+passthrough = [
+    "OPENSSL_NO_PKG_CONFIG",
+    "OPENSSL_STATIC",
 ]
