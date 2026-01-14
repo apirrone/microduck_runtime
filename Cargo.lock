@@ -479,6 +479,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "openssl",
+ "openssl-sys",
  "ort",
  "rustypot",
  "serialport",
