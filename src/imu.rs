@@ -167,10 +167,10 @@ impl ImuController {
 
         // Convert to rad/s (BNO055 gyro scale: 1 LSB = 1/16 dps = 1/16 * π/180 rad/s)
         let scale = 1.0 / 16.0 * std::f64::consts::PI / 180.0;
-        let gyro = [
-            i16::from_le_bytes([gyro_buffer[0], gyro_buffer[1]]) as f64 * scale,
-            i16::from_le_bytes([gyro_buffer[2], gyro_buffer[3]]) as f64 * scale,
-            i16::from_le_bytes([gyro_buffer[4], gyro_buffer[5]]) as f64 * scale,
+        let gyro_sensor = [
+            i16::from_le_bytes([gyro_buffer[0], gyro_buffer[1]]) as f64 * scale,  // sensor X
+            i16::from_le_bytes([gyro_buffer[2], gyro_buffer[3]]) as f64 * scale,  // sensor Y
+            i16::from_le_bytes([gyro_buffer[4], gyro_buffer[5]]) as f64 * scale,  // sensor Z
         ];
 
         // Read quaternion data (8 bytes: W, X, Y, Z as 16-bit signed integers)
@@ -190,7 +190,23 @@ impl ImuController {
         // Use conjugate quaternion for inverse rotation: [w, -x, -y, -z]
         let quat_conj = [quat[0], -quat[1], -quat[2], -quat[3]];
         let world_gravity = [0.0, 0.0, -9.81];
-        let projected_gravity = quat_rotate_vec(quat_conj, world_gravity);
+        let projected_gravity_sensor = quat_rotate_vec(quat_conj, world_gravity);
+
+        // Transform from BNO055 sensor frame to robot frame
+        // BNO055 (Android): X=right, Y=forward, Z=up (when looking at chip)
+        // Robot expected: X=forward, Y=left, Z=up
+        // Transformation: Robot X = Sensor Y, Robot Y = -Sensor X, Robot Z = Sensor Z
+        let gyro = [
+            gyro_sensor[1],   // robot forward = sensor Y
+            -gyro_sensor[0],  // robot left = -sensor X
+            gyro_sensor[2],   // robot up = sensor Z
+        ];
+
+        let projected_gravity = [
+            projected_gravity_sensor[1],   // robot forward = sensor Y
+            -projected_gravity_sensor[0],  // robot left = -sensor X
+            projected_gravity_sensor[2],   // robot up = sensor Z
+        ];
 
         Ok(ImuData {
             gyro,
