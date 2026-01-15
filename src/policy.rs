@@ -131,7 +131,7 @@ mod tests {
 
     #[test]
     fn test_dummy_policy() {
-        let policy = Policy::new_dummy().unwrap();
+        let mut policy = Policy::new_dummy().unwrap();
         let obs = Observation::default();
         let action = policy.infer(&obs).unwrap();
 
@@ -147,7 +147,7 @@ mod tests {
         use std::thread;
         use std::time::Duration;
 
-        let policy = Policy::new_dummy().unwrap();
+        let mut policy = Policy::new_dummy().unwrap();
         let obs = Observation::default();
 
         // Wait a bit so we're not at t=0
