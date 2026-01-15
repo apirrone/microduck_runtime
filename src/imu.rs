@@ -1,8 +1,33 @@
 use anyhow::{Context, Result};
-use bno055::{BNO055OperationMode, Bno055};
-use linux_embedded_hal::{Delay, I2cdev};
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
+use std::os::unix::io::AsRawFd;
 use std::thread;
 use std::time::Duration;
+
+// BNO055 Register addresses
+const BNO055_CHIP_ID: u8 = 0x00;
+const BNO055_PAGE_ID: u8 = 0x07;
+const BNO055_OPR_MODE: u8 = 0x3D;
+const BNO055_PWR_MODE: u8 = 0x3E;
+const BNO055_SYS_TRIGGER: u8 = 0x3F;
+const BNO055_CALIB_STAT: u8 = 0x35;
+
+// Quaternion data registers
+const BNO055_QUA_DATA_W_LSB: u8 = 0x20;
+
+// Gyroscope data registers
+const BNO055_GYR_DATA_X_LSB: u8 = 0x14;
+
+// Operation modes
+const BNO055_MODE_CONFIG: u8 = 0x00;
+const BNO055_MODE_NDOF: u8 = 0x0C;
+
+// Power modes
+const BNO055_POWER_MODE_NORMAL: u8 = 0x00;
+
+// I2C constants
+const I2C_SLAVE: u16 = 0x0703;
 
 /// IMU data containing gyroscope and projected gravity
 #[derive(Debug, Clone, Copy)]
@@ -49,7 +74,7 @@ fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
 
 /// IMU controller for BNO055 sensor
 pub struct ImuController {
-    bno: Bno055<I2cdev>,
+    i2c: std::fs::File,
 }
 
 impl ImuController {
@@ -57,28 +82,52 @@ impl ImuController {
     /// i2c_device: path to I2C device (e.g., "/dev/i2c-1")
     /// address: BNO055 I2C address (0x28 or 0x29)
     pub fn new(i2c_device: &str, address: u8) -> Result<Self> {
-        let i2c = I2cdev::new(i2c_device)
+        let i2c = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(i2c_device)
             .context(format!("Failed to open I2C device: {}", i2c_device))?;
 
-        let mut bno = if address == 0x29 {
-            Bno055::new(i2c).with_alternative_address()
-        } else {
-            Bno055::new(i2c)
-        };
+        // Set I2C slave address
+        unsafe {
+            if libc::ioctl(
+                i2c.as_raw_fd(),
+                I2C_SLAVE as libc::c_ulong,
+                address as libc::c_ulong,
+            ) < 0
+            {
+                return Err(anyhow::anyhow!("Failed to set I2C slave address to 0x{:02X}", address));
+            }
+        }
 
-        let mut delay = Delay;
+        let mut controller = Self { i2c };
 
-        bno.init(&mut delay)
-            .map_err(|e| anyhow::anyhow!("Failed to initialize BNO055: {:?}", e))?;
+        // Verify chip ID
+        let chip_id = controller.read_register(BNO055_CHIP_ID)?;
+        if chip_id != 0xA0 {
+            return Err(anyhow::anyhow!(
+                "Invalid chip ID: 0x{:02X}, expected 0xA0",
+                chip_id
+            ));
+        }
 
-        // Set to NDOF mode (9-axis fusion with fast magnetometer calibration)
-        bno.set_mode(BNO055OperationMode::NDOF, &mut delay)
-            .map_err(|e| anyhow::anyhow!("Failed to set BNO055 mode: {:?}", e))?;
+        // Reset
+        controller.write_register(BNO055_SYS_TRIGGER, 0x20)?;
+        thread::sleep(Duration::from_millis(650)); // Wait for reset
 
-        // Give the sensor time to switch modes
+        // Set to normal power mode
+        controller.write_register(BNO055_PWR_MODE, BNO055_POWER_MODE_NORMAL)?;
+        thread::sleep(Duration::from_millis(10));
+
+        // Select page 0
+        controller.write_register(BNO055_PAGE_ID, 0x00)?;
+        thread::sleep(Duration::from_millis(10));
+
+        // Set to NDOF mode (9-axis fusion)
+        controller.write_register(BNO055_OPR_MODE, BNO055_MODE_NDOF)?;
         thread::sleep(Duration::from_millis(100));
 
-        Ok(Self { bno })
+        Ok(controller)
     }
 
     /// Create a new IMU controller with default settings
@@ -87,30 +136,54 @@ impl ImuController {
         Self::new("/dev/i2c-1", 0x28)
     }
 
+    /// Read a single register
+    fn read_register(&mut self, reg: u8) -> Result<u8> {
+        self.i2c.write(&[reg])?;
+        thread::sleep(Duration::from_micros(100));
+        let mut buffer = [0u8; 1];
+        self.i2c.read(&mut buffer)?;
+        Ok(buffer[0])
+    }
+
+    /// Write a single register
+    fn write_register(&mut self, reg: u8, value: u8) -> Result<()> {
+        self.i2c.write(&[reg, value])?;
+        Ok(())
+    }
+
+    /// Read multiple bytes starting from a register
+    fn read_bytes(&mut self, reg: u8, buffer: &mut [u8]) -> Result<()> {
+        self.i2c.write(&[reg])?;
+        thread::sleep(Duration::from_micros(100));
+        self.i2c.read(buffer)?;
+        Ok(())
+    }
+
     /// Read current IMU data
     pub fn read(&mut self) -> Result<ImuData> {
-        // Read gyroscope (angular velocity) in rad/s
-        let gyro_data = self.bno
-            .gyro_data()
-            .map_err(|e| anyhow::anyhow!("Failed to read gyro: {:?}", e))?;
+        // Read gyroscope data (6 bytes: X, Y, Z as 16-bit signed integers)
+        let mut gyro_buffer = [0u8; 6];
+        self.read_bytes(BNO055_GYR_DATA_X_LSB, &mut gyro_buffer)?;
 
+        // Convert to rad/s (BNO055 gyro scale: 1 LSB = 1/16 dps = 1/16 * π/180 rad/s)
+        let scale = 1.0 / 16.0 * std::f64::consts::PI / 180.0;
         let gyro = [
-            gyro_data.x as f64,
-            gyro_data.y as f64,
-            gyro_data.z as f64,
+            i16::from_le_bytes([gyro_buffer[0], gyro_buffer[1]]) as f64 * scale,
+            i16::from_le_bytes([gyro_buffer[2], gyro_buffer[3]]) as f64 * scale,
+            i16::from_le_bytes([gyro_buffer[4], gyro_buffer[5]]) as f64 * scale,
         ];
 
-        // Read orientation quaternion [w, x, y, z]
-        let quat_data = self.bno
-            .quaternion()
-            .map_err(|e| anyhow::anyhow!("Failed to read quaternion: {:?}", e))?;
+        // Read quaternion data (8 bytes: W, X, Y, Z as 16-bit signed integers)
+        let mut quat_buffer = [0u8; 8];
+        self.read_bytes(BNO055_QUA_DATA_W_LSB, &mut quat_buffer)?;
 
-        // BNO055 quaternion format: s (scalar/w) + v (vector x,y,z)
+        // Convert to normalized quaternion (BNO055 scale: 1 LSB = 1/(2^14))
+        let scale = 1.0 / 16384.0;
         let quat = [
-            quat_data.s as f64,      // w
-            quat_data.v.x as f64,    // x
-            quat_data.v.y as f64,    // y
-            quat_data.v.z as f64,    // z
+            i16::from_le_bytes([quat_buffer[0], quat_buffer[1]]) as f64 * scale, // w
+            i16::from_le_bytes([quat_buffer[2], quat_buffer[3]]) as f64 * scale, // x
+            i16::from_le_bytes([quat_buffer[4], quat_buffer[5]]) as f64 * scale, // y
+            i16::from_le_bytes([quat_buffer[6], quat_buffer[7]]) as f64 * scale, // z
         ];
 
         // Compute projected gravity: rotate world gravity [0, 0, -9.81] to body frame
@@ -128,11 +201,15 @@ impl ImuController {
     /// Get calibration status
     /// Returns (system, gyro, accel, mag) calibration levels (0-3)
     pub fn get_calibration_status(&mut self) -> Result<(u8, u8, u8, u8)> {
-        let status = self.bno
-            .get_calibration_status()
-            .map_err(|e| anyhow::anyhow!("Failed to read calibration status: {:?}", e))?;
+        let status = self.read_register(BNO055_CALIB_STAT)?;
 
-        Ok((status.sys, status.gyr, status.acc, status.mag))
+        // Extract calibration status for each sensor
+        let mag = (status >> 0) & 0x03;
+        let acc = (status >> 2) & 0x03;
+        let gyr = (status >> 4) & 0x03;
+        let sys = (status >> 6) & 0x03;
+
+        Ok((sys, gyr, acc, mag))
     }
 }
 
