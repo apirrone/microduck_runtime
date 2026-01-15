@@ -1,4 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
+use bno055::{BNO055OperationMode, Bno055};
+use linux_embedded_hal::{Delay, I2cdev};
+use std::thread;
+use std::time::Duration;
 
 /// IMU data containing gyroscope and projected gravity
 #[derive(Debug, Clone, Copy)]
@@ -44,55 +48,106 @@ fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
 }
 
 /// IMU controller for BNO055 sensor
-/// Currently a dummy implementation, to be replaced with actual BNO055 driver
 pub struct ImuController {
-    // Placeholder for future BNO055 device handle
-    _dummy: (),
+    bno: Bno055<I2cdev>,
 }
 
 impl ImuController {
     /// Create a new IMU controller
-    /// TODO: Add actual BNO055 initialization when sensor is connected
-    pub fn new() -> Result<Self> {
-        Ok(Self { _dummy: () })
+    /// i2c_device: path to I2C device (e.g., "/dev/i2c-1")
+    /// address: BNO055 I2C address (0x28 or 0x29)
+    pub fn new(i2c_device: &str, address: u8) -> Result<Self> {
+        let i2c = I2cdev::new(i2c_device)
+            .context(format!("Failed to open I2C device: {}", i2c_device))?;
+
+        let mut bno = if address == 0x29 {
+            Bno055::new(i2c).with_alternative_address()
+        } else {
+            Bno055::new(i2c)
+        };
+
+        let mut delay = Delay;
+
+        bno.init(&mut delay)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize BNO055: {:?}", e))?;
+
+        // Set to NDOF mode (9-axis fusion with fast magnetometer calibration)
+        bno.set_mode(BNO055OperationMode::NDOF, &mut delay)
+            .map_err(|e| anyhow::anyhow!("Failed to set BNO055 mode: {:?}", e))?;
+
+        // Give the sensor time to switch modes
+        thread::sleep(Duration::from_millis(100));
+
+        Ok(Self { bno })
+    }
+
+    /// Create a new IMU controller with default settings
+    /// Uses /dev/i2c-1 and address 0x28
+    pub fn new_default() -> Result<Self> {
+        Self::new("/dev/i2c-1", 0x28)
     }
 
     /// Read current IMU data
-    /// TODO: Replace with actual BNO055 readings
     pub fn read(&mut self) -> Result<ImuData> {
-        // Return default values for now
-        // When implementing with real BNO055:
-        // 1. Read gyroscope (angular velocity) in rad/s
-        // 2. Read orientation quaternion [w, x, y, z]
-        // 3. Compute projected gravity:
-        //    - World gravity = [0.0, 0.0, -9.81]
-        //    - Conjugate quaternion to get inverse rotation: quat_conj = [w, -x, -y, -z]
-        //    - Rotate gravity to body frame: projected_gravity = quat_rotate_vec(quat_conj, world_gravity)
-        // 4. Return ImuData { gyro, accel: projected_gravity }
-        //
-        // Note: BNO055 quaternion format may need conversion
-        // BNO055 uses [w, x, y, z] format which matches our quat_rotate_vec function
-        Ok(ImuData::default())
+        // Read gyroscope (angular velocity) in rad/s
+        let gyro_data = self.bno
+            .gyro_data()
+            .map_err(|e| anyhow::anyhow!("Failed to read gyro: {:?}", e))?;
+
+        let gyro = [
+            gyro_data.x as f64,
+            gyro_data.y as f64,
+            gyro_data.z as f64,
+        ];
+
+        // Read orientation quaternion [w, x, y, z]
+        let quat_data = self.bno
+            .quaternion()
+            .map_err(|e| anyhow::anyhow!("Failed to read quaternion: {:?}", e))?;
+
+        // BNO055 quaternion format: s (scalar/w) + v (vector x,y,z)
+        let quat = [
+            quat_data.s as f64,      // w
+            quat_data.v.x as f64,    // x
+            quat_data.v.y as f64,    // y
+            quat_data.v.z as f64,    // z
+        ];
+
+        // Compute projected gravity: rotate world gravity [0, 0, -9.81] to body frame
+        // Use conjugate quaternion for inverse rotation: [w, -x, -y, -z]
+        let quat_conj = [quat[0], -quat[1], -quat[2], -quat[3]];
+        let world_gravity = [0.0, 0.0, -9.81];
+        let projected_gravity = quat_rotate_vec(quat_conj, world_gravity);
+
+        Ok(ImuData {
+            gyro,
+            accel: projected_gravity,
+        })
+    }
+
+    /// Get calibration status
+    /// Returns (system, gyro, accel, mag) calibration levels (0-3)
+    pub fn get_calibration_status(&mut self) -> Result<(u8, u8, u8, u8)> {
+        let status = self.bno
+            .get_calibration_status()
+            .map_err(|e| anyhow::anyhow!("Failed to read calibration status: {:?}", e))?;
+
+        Ok((status.sys, status.gyr, status.acc, status.mag))
     }
 }
 
-impl Default for ImuController {
-    fn default() -> Self {
-        Self::new().unwrap()
-    }
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_imu_dummy() {
-        let mut imu = ImuController::new().unwrap();
-        let data = imu.read().unwrap();
+    fn test_imu_data_default() {
+        let data = ImuData::default();
 
         // Check default projected gravity (upright robot)
         assert_eq!(data.accel[2], -9.81);
+        assert_eq!(data.gyro[0], 0.0);
     }
 
     #[test]

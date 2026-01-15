@@ -70,10 +70,10 @@ impl Runtime {
             .context("Failed to initialize motor controller")?;
         println!("✓ Motor controller initialized on {} at {} baud", args.port, args.baudrate);
 
-        // Initialize IMU controller (dummy for now)
-        let imu_controller = ImuController::new()
-            .context("Failed to initialize IMU controller")?;
-        println!("✓ IMU controller initialized (dummy mode)");
+        // Initialize IMU controller (BNO055 on I2C)
+        let imu_controller = ImuController::new_default()
+            .context("Failed to initialize IMU controller (BNO055 on /dev/i2c-1)")?;
+        println!("✓ IMU controller initialized (BNO055)");
 
         // Initialize policy based on arguments
         let policy = if args.dummy {
