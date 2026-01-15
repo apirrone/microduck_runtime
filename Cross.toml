@@ -3,7 +3,7 @@ pre-build = [
     "dpkg --add-architecture arm64",
     "apt-get update",
     "echo '=== Checking available libudev packages ===' && apt-cache search libudev | grep -E '^libudev'",
-    "echo '=== Installing packages ===' && apt-get install -y libudev1:arm64 libudev-dev libudev-dev:arm64 pkg-config curl ca-certificates libstdc++6:arm64 libgcc-s1:arm64",
+    "echo '=== Installing packages ===' && apt-get install -y libudev1:arm64 libudev-dev libudev-dev:arm64 pkg-config curl ca-certificates libstdc++6:arm64",
     "echo '=== Verifying libudev1:arm64 installation ===' && dpkg -L libudev1:arm64 | grep '\\.so'",
     "mkdir -p /usr/lib/aarch64-linux-gnu/pkgconfig",
     "mkdir -p /.cache && chmod 777 /.cache",
