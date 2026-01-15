@@ -7,7 +7,10 @@ pre-build = [
     "mkdir -p /root/.cache && chmod 777 /root/.cache",
     "mkdir -p /tmp/.cache && chmod 777 /tmp/.cache",
     "printf 'prefix=/usr\\nexec_prefix=${prefix}\\nlibdir=${exec_prefix}/lib/aarch64-linux-gnu\\nincludedir=${prefix}/include\\n\\nName: libudev\\nDescription: Library to access udev device information\\nVersion: 1.0\\nLibs: -L${libdir} -ludev\\nCflags: -I${includedir}\\n' > /usr/lib/aarch64-linux-gnu/pkgconfig/libudev.pc",
-    "ls -la /usr/lib/aarch64-linux-gnu/libudev.so* || echo 'libudev.so not found'"
+    "echo '=== Checking for libudev files ===' && find /usr -name '*libudev*' -type f 2>/dev/null | head -20",
+    "echo '=== Contents of /usr/lib/aarch64-linux-gnu ===' && ls -la /usr/lib/aarch64-linux-gnu/ | grep udev",
+    "echo '=== Creating symlink if needed ===' && if [ ! -e /usr/lib/aarch64-linux-gnu/libudev.so ]; then ln -s /usr/lib/aarch64-linux-gnu/libudev.so.1 /usr/lib/aarch64-linux-gnu/libudev.so 2>/dev/null || echo 'Could not create symlink'; fi",
+    "ls -la /usr/lib/aarch64-linux-gnu/libudev.so* || echo 'Still no libudev.so'"
 ]
 
 [build.env]
