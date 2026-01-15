@@ -4,7 +4,8 @@ pre-build = [
     "apt-get update && apt-get install -y libudev-dev libudev-dev:arm64 pkg-config curl ca-certificates libstdc++6:arm64 libgcc-s1:arm64",
     "mkdir -p /.cache && chmod 777 /.cache",
     "mkdir -p /root/.cache && chmod 777 /root/.cache",
-    "mkdir -p /tmp/.cache && chmod 777 /tmp/.cache"
+    "mkdir -p /tmp/.cache && chmod 777 /tmp/.cache",
+    "echo 'Searching for libudev.pc files:' && find /usr -name 'libudev.pc' 2>/dev/null || echo 'No libudev.pc found'"
 ]
 
 [build.env]
