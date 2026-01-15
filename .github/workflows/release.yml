@@ -33,7 +33,8 @@ jobs:
       - name: Build for Raspberry Pi Zero 2W (ARM64)
         env:
           CARGO_HOME: /tmp/cargo
-        run: cross build --release --target aarch64-unknown-linux-gnu
+          RUST_BACKTRACE: 1
+        run: cross build --release --target aarch64-unknown-linux-gnu --verbose
 
       - name: Prepare binaries
         run: |
