@@ -580,6 +580,7 @@ dependencies = [
  "bno055",
  "clap",
  "ctrlc",
+ "libc",
  "linux-embedded-hal",
  "openssl",
  "openssl-sys",

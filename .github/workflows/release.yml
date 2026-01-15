@@ -40,8 +40,9 @@ jobs:
           mkdir -p dist
           cp target/aarch64-unknown-linux-gnu/release/microduck_runtime dist/
           cp target/aarch64-unknown-linux-gnu/release/test_imu dist/
+          cp target/aarch64-unknown-linux-gnu/release/test_i2c_raw dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw
           cd ..
 
       - name: Create Release
@@ -58,6 +59,7 @@ jobs:
 
             - **microduck_runtime**: Main robot control runtime
             - **test_imu**: BNO055 IMU testing tool
+            - **test_i2c_raw**: Raw I2C diagnostic tool
 
             ### Installation
 
@@ -68,7 +70,7 @@ jobs:
             Or download and extract manually:
             ```bash
             tar xzf microduck_runtime-aarch64-linux.tar.gz
-            sudo mv microduck_runtime test_imu /usr/local/bin/
+            sudo mv microduck_runtime test_imu test_i2c_raw /usr/local/bin/
             ```
 
             ### Usage
@@ -80,6 +82,9 @@ jobs:
 
             # Test IMU
             test_imu
+
+            # Diagnose I2C issues
+            test_i2c_raw
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
