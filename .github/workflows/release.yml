@@ -36,14 +36,21 @@ jobs:
           RUST_BACKTRACE: 1
         run: cross build --release --target aarch64-unknown-linux-gnu --verbose
 
+      - name: Download ONNX Runtime for ARM64
+        run: |
+          curl -L https://github.com/microsoft/onnxruntime/releases/download/v1.20.1/onnxruntime-linux-aarch64-1.20.1.tgz -o /tmp/ort.tgz
+          tar xzf /tmp/ort.tgz -C /tmp
+
       - name: Prepare binaries
         run: |
           mkdir -p dist
           cp target/aarch64-unknown-linux-gnu/release/microduck_runtime dist/
           cp target/aarch64-unknown-linux-gnu/release/test_imu dist/
           cp target/aarch64-unknown-linux-gnu/release/test_i2c_raw dist/
+          # Copy ONNX Runtime library
+          cp /tmp/onnxruntime-linux-aarch64-1.20.1/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw libonnxruntime.so*
           cd ..
 
       - name: Create Release
@@ -56,11 +63,12 @@ jobs:
 
             Cross-compiled binaries for Raspberry Pi Zero 2W (ARM64).
 
-            ### Included Binaries
+            ### Included Files
 
             - **microduck_runtime**: Main robot control runtime
             - **test_imu**: BNO055 IMU testing tool
             - **test_i2c_raw**: Raw I2C diagnostic tool
+            - **libonnxruntime.so**: ONNX Runtime library (required for policy inference)
 
             ### Installation
 
