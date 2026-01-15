@@ -104,9 +104,9 @@ ONNX_LIB_DIR="/usr/local/lib"
 if ls libonnxruntime.so* 1> /dev/null 2>&1; then
     echo "Installing ONNX Runtime library..."
     if [ -w "$ONNX_LIB_DIR" ]; then
-        cp libonnxruntime.so* "$ONNX_LIB_DIR/"
+        cp -a libonnxruntime.so* "$ONNX_LIB_DIR/"
     else
-        sudo cp libonnxruntime.so* "$ONNX_LIB_DIR/"
+        sudo cp -a libonnxruntime.so* "$ONNX_LIB_DIR/"
     fi
     # Update library cache
     if command -v ldconfig &> /dev/null; then
