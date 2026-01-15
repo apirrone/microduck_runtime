@@ -52,7 +52,8 @@ fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
 }
 
 /// Read quaternion directly from IMU (duplicate of read() but returns more data)
-fn read_imu_detailed(imu: &mut ImuController) -> Result<([f64; 3], [f64; 4], [f64; 3])> {
+/// Returns: (accel_raw, gyro, quat, projected_gravity)
+fn read_imu_detailed(imu: &mut ImuController) -> Result<([f64; 3], [f64; 3], [f64; 4], [f64; 3])> {
     use std::fs::OpenOptions;
     use std::io::{Read, Write};
     use std::os::unix::io::AsRawFd;
@@ -81,6 +82,20 @@ fn read_imu_detailed(imu: &mut ImuController) -> Result<([f64; 3], [f64; 4], [f6
             return Err(anyhow::anyhow!("Failed to set I2C slave address"));
         }
     }
+
+    // Read accelerometer data (raw sensor measurement, includes gravity + linear acceleration)
+    const BNO055_ACC_DATA_X_LSB: u8 = 0x08;
+    let mut accel_buffer = [0u8; 6];
+    i2c.write(&[BNO055_ACC_DATA_X_LSB])?;
+    thread::sleep(Duration::from_micros(100));
+    i2c.read(&mut accel_buffer)?;
+
+    // BNO055 accelerometer scale: 1 LSB = 1 m/s² (in m/s² mode, which is default in NDOF)
+    let accel_raw = [
+        i16::from_le_bytes([accel_buffer[0], accel_buffer[1]]) as f64 / 100.0,  // 1 LSB = 0.01 m/s²
+        i16::from_le_bytes([accel_buffer[2], accel_buffer[3]]) as f64 / 100.0,
+        i16::from_le_bytes([accel_buffer[4], accel_buffer[5]]) as f64 / 100.0,
+    ];
 
     // Read gyroscope data
     const BNO055_GYR_DATA_X_LSB: u8 = 0x14;
@@ -116,7 +131,7 @@ fn read_imu_detailed(imu: &mut ImuController) -> Result<([f64; 3], [f64; 4], [f6
     let world_gravity = [0.0, 0.0, -9.81];
     let projected_gravity = quat_rotate_vec(quat_conj, world_gravity);
 
-    Ok((gyro, quat, projected_gravity))
+    Ok((accel_raw, gyro, quat, projected_gravity))
 }
 
 fn main() -> Result<()> {
@@ -180,7 +195,7 @@ fn main() -> Result<()> {
     println!();
 
     loop {
-        let (gyro, quat, proj_grav) = read_imu_detailed(&mut imu)?;
+        let (accel_raw, gyro, quat, proj_grav) = read_imu_detailed(&mut imu)?;
 
         // Convert quaternion to Euler angles
         let euler = quat_to_euler(quat);
@@ -193,10 +208,15 @@ fn main() -> Result<()> {
         // Check quaternion magnitude
         let quat_mag = (quat[0].powi(2) + quat[1].powi(2) + quat[2].powi(2) + quat[3].powi(2)).sqrt();
 
+        // Check raw accelerometer magnitude
+        let accel_raw_mag = (accel_raw[0].powi(2) + accel_raw[1].powi(2) + accel_raw[2].powi(2)).sqrt();
+
         // Clear screen (optional, comment out if too jumpy)
         // print!("\x1B[2J\x1B[1;1H");
 
         println!("┌─────────────────────────────────────────────────────────────┐");
+        println!("│ Accel_raw (m/s²):  X={:7.3}  Y={:7.3}  Z={:7.3} mag={:5.2} │",
+                 accel_raw[0], accel_raw[1], accel_raw[2], accel_raw_mag);
         println!("│ Gyro (rad/s):      X={:7.3}  Y={:7.3}  Z={:7.3}      │",
                  gyro[0], gyro[1], gyro[2]);
         println!("│ Quaternion [WXYZ]: {:6.3} {:6.3} {:6.3} {:6.3} (mag={:.3}) │",
@@ -207,6 +227,11 @@ fn main() -> Result<()> {
                  proj_grav[0], proj_grav[1], proj_grav[2]);
 
         // Apply robot frame transformation (same as in imu.rs)
+        let accel_raw_robot = [
+            accel_raw[1],   // robot forward = sensor Y
+            -accel_raw[0],  // robot left = -sensor X
+            accel_raw[2],   // robot up = sensor Z
+        ];
         let gyro_robot = [
             gyro[1],   // robot forward = sensor Y
             -gyro[0],  // robot left = -sensor X
@@ -218,8 +243,12 @@ fn main() -> Result<()> {
             proj_grav[2],   // robot up = sensor Z
         ];
 
+        let accel_raw_robot_mag = (accel_raw_robot[0].powi(2) + accel_raw_robot[1].powi(2) + accel_raw_robot[2].powi(2)).sqrt();
+
         println!("├─────────────────────────────────────────────────────────────┤");
         println!("│ TRANSFORMED TO ROBOT FRAME (X=fwd, Y=left, Z=up):          │");
+        println!("│ Accel_raw_robot:    X={:7.3}  Y={:7.3}  Z={:7.3} mag={:5.2} │",
+                 accel_raw_robot[0], accel_raw_robot[1], accel_raw_robot[2], accel_raw_robot_mag);
         println!("│ Gyro_robot (rad/s): X={:7.3}  Y={:7.3}  Z={:7.3}      │",
                  gyro_robot[0], gyro_robot[1], gyro_robot[2]);
         println!("│ ProjGrav_robot:     X={:7.3}  Y={:7.3}  Z={:7.3}      │",
@@ -238,9 +267,34 @@ fn main() -> Result<()> {
             println!("⚠ Warning: Quaternion magnitude is {:.3}, expected ~1.0", quat_mag);
         }
 
-        let grav_mag = (proj_grav[0].powi(2) + proj_grav[1].powi(2) + proj_grav[2].powi(2)).sqrt();
-        if (grav_mag - 9.81).abs() > 0.5 {
-            println!("⚠ Warning: Projected gravity magnitude is {:.2} m/s², expected ~9.81", grav_mag);
+        let grav_mag_sensor = (proj_grav[0].powi(2) + proj_grav[1].powi(2) + proj_grav[2].powi(2)).sqrt();
+        let grav_mag_robot = (proj_grav_robot[0].powi(2) + proj_grav_robot[1].powi(2) + proj_grav_robot[2].powi(2)).sqrt();
+
+        if (grav_mag_sensor - 9.81).abs() > 0.5 {
+            println!("⚠ Warning: Projected gravity magnitude is {:.2} m/s², expected ~9.81", grav_mag_sensor);
+            println!("   This suggests the quaternion rotation is NOT preserving magnitude!");
+            println!("   Input magnitude: 9.81, Output magnitude: {:.2}", grav_mag_sensor);
+            println!("   Raw accelerometer magnitude: {:.2} m/s²", accel_raw_mag);
+
+            if (accel_raw_mag - 9.81).abs() > 0.5 {
+                println!("   → Raw accel is also >9.81, suggesting LINEAR ACCELERATION during motion");
+                println!("   → This is NORMAL when manually moving the robot!");
+            }
+        }
+
+        // Verify transformation doesn't change magnitude
+        if (grav_mag_sensor - grav_mag_robot).abs() > 0.01 {
+            println!("⚠ ERROR: Axis transformation changed magnitude from {:.2} to {:.2}!",
+                     grav_mag_sensor, grav_mag_robot);
+        }
+
+        // Compare raw accel vs projected gravity
+        let diff_mag = ((accel_raw[0] - proj_grav[0]).powi(2) +
+                       (accel_raw[1] - proj_grav[1]).powi(2) +
+                       (accel_raw[2] - proj_grav[2]).powi(2)).sqrt();
+        if diff_mag > 1.0 {
+            println!("ℹ  Difference between raw accel and projected gravity: {:.2} m/s²", diff_mag);
+            println!("   This suggests LINEAR ACCELERATION (robot is moving, not just oriented)");
         }
 
         thread::sleep(Duration::from_millis(200)); // 5 Hz for readability
