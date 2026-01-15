@@ -205,6 +205,26 @@ fn main() -> Result<()> {
                  euler_deg[0], euler_deg[1], euler_deg[2]);
         println!("│ ProjGrav (m/s²):   X={:7.3}  Y={:7.3}  Z={:7.3}      │",
                  proj_grav[0], proj_grav[1], proj_grav[2]);
+
+        // Apply robot frame transformation (same as in imu.rs)
+        let gyro_robot = [
+            gyro[1],   // robot forward = sensor Y
+            -gyro[0],  // robot left = -sensor X
+            gyro[2],   // robot up = sensor Z
+        ];
+        let proj_grav_robot = [
+            proj_grav[1],   // robot forward = sensor Y
+            -proj_grav[0],  // robot left = -sensor X
+            proj_grav[2],   // robot up = sensor Z
+        ];
+
+        println!("├─────────────────────────────────────────────────────────────┤");
+        println!("│ TRANSFORMED TO ROBOT FRAME (X=fwd, Y=left, Z=up):          │");
+        println!("│ Gyro_robot (rad/s): X={:7.3}  Y={:7.3}  Z={:7.3}      │",
+                 gyro_robot[0], gyro_robot[1], gyro_robot[2]);
+        println!("│ ProjGrav_robot:     X={:7.3}  Y={:7.3}  Z={:7.3}      │",
+                 proj_grav_robot[0], proj_grav_robot[1], proj_grav_robot[2]);
+
         println!("└─────────────────────────────────────────────────────────────┘");
         println!();
 
