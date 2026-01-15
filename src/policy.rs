@@ -1,23 +1,22 @@
 use anyhow::Result;
 use crate::motor::NUM_MOTORS;
 use crate::observation::Observation;
+use ort::session::{Session, builder::GraphOptimizationLevel};
+use ort::value::Value;
 use std::time::Instant;
 
 /// Policy mode
 pub enum PolicyMode {
-    /// Dummy policy that always outputs zeros (for testing)
+    /// Dummy policy that generates squatting motion
     Dummy,
-    /// ONNX Runtime policy (not yet implemented)
-    #[allow(dead_code)]
-    Onnx,
+    /// ONNX Runtime policy
+    Onnx(Session),
 }
 
 /// Policy inference engine using ONNX Runtime
 pub struct Policy {
     mode: PolicyMode,
     start_time: Instant,
-    // TODO: Add ONNX session when model is ready
-    // session: ort::Session,
 }
 
 impl Policy {
@@ -33,27 +32,14 @@ impl Policy {
     ///
     /// # Arguments
     /// * `model_path` - Path to the ONNX model file
-    ///
-    /// # TODO
-    /// Uncomment and implement when you have an ONNX model:
-    /// ```ignore
-    /// pub fn new_onnx(model_path: &str) -> Result<Self> {
-    ///     ort::init().commit()?;
-    ///     let session = ort::Session::builder()?
-    ///         .with_optimization_level(ort::GraphOptimizationLevel::Level3)?
-    ///         .with_intra_threads(2)? // Limit threads for Raspberry Pi Zero 2W
-    ///         .commit_from_file(model_path)?;
-    ///     Ok(Self {
-    ///         mode: PolicyMode::Onnx,
-    ///         start_time: Instant::now(),
-    ///         session
-    ///     })
-    /// }
-    /// ```
-    #[allow(dead_code)]
-    pub fn new_onnx(_model_path: &str) -> Result<Self> {
+    pub fn new_onnx(model_path: &str) -> Result<Self> {
+        let session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(2)? // Limit threads for Raspberry Pi Zero 2W
+            .commit_from_file(model_path)?;
+
         Ok(Self {
-            mode: PolicyMode::Onnx,
+            mode: PolicyMode::Onnx(session),
             start_time: Instant::now(),
         })
     }
@@ -65,8 +51,8 @@ impl Policy {
     ///
     /// # Returns
     /// Action vector (14 dimensions) for motor position offsets
-    pub fn infer(&self, _observation: &Observation) -> Result<[f32; NUM_MOTORS]> {
-        match self.mode {
+    pub fn infer(&mut self, observation: &Observation) -> Result<[f32; NUM_MOTORS]> {
+        match &mut self.mode {
             PolicyMode::Dummy => {
                 // Dummy policy: generate squatting motion
                 // Frequency: 0.5 Hz, Amplitude: 0.2 rad (hip_pitch, ankle), 0.4 rad (knee)
@@ -92,17 +78,48 @@ impl Policy {
 
                 Ok(actions)
             }
-            PolicyMode::Onnx => {
-                // TODO: Implement actual ONNX inference:
-                // let input = ort::inputs![observation.as_slice()]?;
-                // let outputs = self.session.run(input)?;
-                // let output: ort::SessionOutputs = outputs;
-                // let action = output[0].try_extract_tensor::<f32>()?;
-                //
-                // let mut result = [0.0f32; NUM_MOTORS];
-                // result.copy_from_slice(&action.view().as_slice().unwrap()[..NUM_MOTORS]);
-                // Ok(result)
-                Ok([0.0; NUM_MOTORS])
+            PolicyMode::Onnx(session) => {
+                // Create input tensor from observation (shape: [1, 51])
+                let obs_vec = observation.as_slice().to_vec();
+
+                // Create Value from tuple (shape, data)
+                // Shape is [1, 51] - batch size 1, observation dimension 51
+                let input_value = Value::from_array(([1, 51], obs_vec))
+                    .map_err(|e| anyhow::anyhow!("Failed to create input value: {}", e))?;
+
+                // Run inference
+                // Note: Input name might need to be adjusted based on the ONNX model
+                // Common names: "obs", "input", "observation"
+                let outputs = session
+                    .run(ort::inputs!["obs" => &input_value])
+                    .map_err(|e| anyhow::anyhow!("ONNX inference failed (try checking input name): {}", e))?;
+
+                // Extract output tensor (expecting shape [1, 14])
+                // Try to get the first output (or by name if we knew it)
+                let output = outputs.values().next()
+                    .ok_or_else(|| anyhow::anyhow!("No output from ONNX model"))?;
+
+                let (output_shape, output_data) = output
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| anyhow::anyhow!("Failed to extract output tensor: {}", e))?;
+
+                // Verify output shape
+                let shape_dims = output_shape.as_ref();
+                if shape_dims.len() != 2 || shape_dims[1] != NUM_MOTORS as i64 {
+                    return Err(anyhow::anyhow!(
+                        "Unexpected output shape: {:?}, expected [1, {}]",
+                        shape_dims,
+                        NUM_MOTORS
+                    ));
+                }
+
+                // Copy output to actions array
+                let mut actions = [0.0f32; NUM_MOTORS];
+                for i in 0..NUM_MOTORS {
+                    actions[i] = output_data[i];
+                }
+
+                Ok(actions)
             }
         }
     }
