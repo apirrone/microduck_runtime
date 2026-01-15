@@ -22,11 +22,15 @@ The BNO055 uses Android coordinate system:
 - **Z = up** (out of chip surface)
 
 **On the microduck robot, the sensor is mounted with:**
-- Sensor Y axis → Robot X axis (forward)
-- Sensor -X axis → Robot Y axis (left)
-- Sensor -Z axis → Robot Z axis (up) - **the sensor Z points downward**
+- Sensor Y axis → Robot X axis (forward, with sign adjustment)
+- Sensor X axis → Robot Y axis (flipped from right to left)
+- Sensor Z axis → Robot Z axis (up)
 
-This transformation `(Sensor_Y, -Sensor_X, -Sensor_Z)` is already applied in the code.
+**Applied transformations:**
+- Gyro: `robot = (-sensor_Y, -sensor_X, sensor_Z)`
+- Projected gravity: `robot = (sensor_Y, sensor_X, -sensor_Z)`
+
+The difference accounts for the negation from accelerometer (normal force) to gravity.
 
 ## Using the Debug Tool
 
@@ -66,20 +70,22 @@ With the robot on a flat surface:
 #### Test 2: Pitch (Tilt Forward/Backward)
 - Tilt robot forward (nose down)
 - **Pitch should increase** (positive angle)
-- **Projected Gravity X should become negative** (gravity points backward in body frame)
+- **Projected Gravity X should become NEGATIVE** (e.g., -0.4 at 22° pitch)
+- This matches MuJoCo behavior: gravity appears to point backward when nose is down
 
 - Tilt robot backward (nose up)
 - **Pitch should decrease** (negative angle)
-- **Projected Gravity X should become positive** (gravity points forward in body frame)
+- **Projected Gravity X should become positive** (gravity appears to point forward when nose is up)
 
 #### Test 3: Roll (Tilt Left/Right)
-- Tilt robot to the left
+- Tilt robot to the right (right side down)
 - **Roll should increase** (positive angle)
-- **Projected Gravity Y should become negative** (gravity points to the right in body frame)
+- **Projected Gravity Y should become POSITIVE** (gravity appears to point left when tilted right)
+- This matches MuJoCo behavior
 
-- Tilt robot to the right
+- Tilt robot to the left (left side down)
 - **Roll should decrease** (negative angle)
-- **Projected Gravity Y should become positive** (gravity points to the left in body frame)
+- **Projected Gravity Y should become negative** (gravity appears to point right when tilted left)
 
 #### Test 4: Yaw (Rotate Horizontally)
 - Rotate robot clockwise (viewed from above)
