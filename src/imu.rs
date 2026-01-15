@@ -189,22 +189,21 @@ impl ImuController {
         // Transform from BNO055 sensor frame to robot frame
         // BNO055 (Android): X=right, Y=forward, Z=up (when looking at chip)
         // Robot expected: X=forward, Y=left, Z=up
-        // Transformation: Robot X = Sensor Y, Robot Y = -Sensor X, Robot Z = Sensor Z
+        // Sensor appears to be mounted with Z axis inverted
+        // Transformation: Robot = (Sensor_Y, -Sensor_X, -Sensor_Z)
         let gyro = [
             gyro_sensor[1],   // robot forward = sensor Y
             -gyro_sensor[0],  // robot left = -sensor X
-            gyro_sensor[2],   // robot up = sensor Z
+            -gyro_sensor[2],  // robot up = -sensor Z (sensor Z points down on this mount)
         ];
 
-        // Transform accelerometer to robot frame and negate to get projected gravity
-        // Accelerometer measures proper acceleration (normal force), opposite of gravity
-        // MuJoCo uses projected_gravity = quat_apply_inverse(quat, [0, 0, -9.81])
-        // Accel_robot_frame = (sensor_Y, -sensor_X, sensor_Z)
-        // Projected_gravity = -Accel_robot_frame = (-sensor_Y, sensor_X, -sensor_Z)
+        // Transform accelerometer to robot frame to get projected gravity
+        // BNO055 sensor appears to be mounted with Z axis inverted
+        // Transformation: (sensor_Y, -sensor_X, -sensor_Z) gives projected gravity directly
         let accel_raw = [
-            -accel_sensor[1],   // -sensor Y
-            accel_sensor[0],    // sensor X (robot left = -(-sensor X))
-            -accel_sensor[2],   // -sensor Z
+            accel_sensor[1],    // sensor Y → robot X (forward)
+            -accel_sensor[0],   // -sensor X → robot Y (left)
+            -accel_sensor[2],   // -sensor Z → robot Z (up, but sensor Z points down on this mount)
         ];
 
         // Normalize to unit length (MuJoCo uses normalized projected gravity)

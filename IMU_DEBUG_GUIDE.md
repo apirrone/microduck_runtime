@@ -14,14 +14,19 @@ Rotations are defined as:
 - **Pitch**: rotation around Y axis (left) - tilting forward/back
 - **Yaw**: rotation around Z axis (up) - rotating horizontally
 
-## BNO055 Frame Convention
+## BNO055 Frame Convention and Mounting
 
 The BNO055 uses Android coordinate system:
 - **X = right** (when looking at chip)
 - **Y = forward** (when looking at chip)
 - **Z = up** (out of chip surface)
 
-This means the BNO055 orientation on your robot PCB matters! You may need to transform the IMU data if the sensor is mounted in a different orientation.
+**On the microduck robot, the sensor is mounted with:**
+- Sensor Y axis → Robot X axis (forward)
+- Sensor -X axis → Robot Y axis (left)
+- Sensor -Z axis → Robot Z axis (up) - **the sensor Z points downward**
+
+This transformation `(Sensor_Y, -Sensor_X, -Sensor_Z)` is already applied in the code.
 
 ## Using the Debug Tool
 
