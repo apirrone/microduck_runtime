@@ -21,11 +21,10 @@ path = "examples/test_i2c_raw.rs"
 
 [dependencies]
 rustypot = "1.4.2"
-ort = { version = "2.0.0-rc.11", features = ["load-dynamic"] }
+ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
 anyhow = "1.0"
 ctrlc = "3.4"
 serialport = "4.8"
 clap = { version = "4.5", features = ["derive"] }
-openssl = "0.10"
 libc = "0.2"
 ndarray = "0.15"
