@@ -1,16 +1,18 @@
 [target.aarch64-unknown-linux-gnu]
 pre-build = [
     "dpkg --add-architecture arm64",
-    "apt-get update && apt-get install -y libudev1:arm64 libudev-dev libudev-dev:arm64 pkg-config curl ca-certificates libstdc++6:arm64 libgcc-s1:arm64",
+    "apt-get update",
+    "echo '=== Checking available libudev packages ===' && apt-cache search libudev | grep -E '^libudev'",
+    "echo '=== Installing packages ===' && apt-get install -y libudev1:arm64 libudev-dev libudev-dev:arm64 pkg-config curl ca-certificates libstdc++6:arm64 libgcc-s1:arm64",
+    "echo '=== Verifying libudev1:arm64 installation ===' && dpkg -L libudev1:arm64 | grep '\\.so'",
     "mkdir -p /usr/lib/aarch64-linux-gnu/pkgconfig",
     "mkdir -p /.cache && chmod 777 /.cache",
     "mkdir -p /root/.cache && chmod 777 /root/.cache",
     "mkdir -p /tmp/.cache && chmod 777 /tmp/.cache",
     "printf 'prefix=/usr\\nexec_prefix=${prefix}\\nlibdir=${exec_prefix}/lib/aarch64-linux-gnu\\nincludedir=${prefix}/include\\n\\nName: libudev\\nDescription: Library to access udev device information\\nVersion: 1.0\\nLibs: -L${libdir} -ludev\\nCflags: -I${includedir}\\n' > /usr/lib/aarch64-linux-gnu/pkgconfig/libudev.pc",
-    "echo '=== Checking for libudev files ===' && find /usr -name '*libudev*' -type f 2>/dev/null | head -20",
-    "echo '=== Contents of /usr/lib/aarch64-linux-gnu ===' && ls -la /usr/lib/aarch64-linux-gnu/ | grep udev",
-    "echo '=== Creating symlink if needed ===' && if [ ! -e /usr/lib/aarch64-linux-gnu/libudev.so ]; then ln -s /usr/lib/aarch64-linux-gnu/libudev.so.1 /usr/lib/aarch64-linux-gnu/libudev.so 2>/dev/null || echo 'Could not create symlink'; fi",
-    "ls -la /usr/lib/aarch64-linux-gnu/libudev.so* || echo 'Still no libudev.so'"
+    "echo '=== All libudev files ===' && find /usr /lib -name '*libudev*' 2>/dev/null | head -30",
+    "if [ -f /usr/lib/aarch64-linux-gnu/libudev.so.1 ]; then ln -sf /usr/lib/aarch64-linux-gnu/libudev.so.1 /usr/lib/aarch64-linux-gnu/libudev.so; elif [ -f /lib/aarch64-linux-gnu/libudev.so.1 ]; then ln -sf /lib/aarch64-linux-gnu/libudev.so.1 /usr/lib/aarch64-linux-gnu/libudev.so; else echo 'ERROR: libudev.so.1 not found anywhere!'; fi",
+    "ls -la /usr/lib/aarch64-linux-gnu/libudev* /lib/aarch64-linux-gnu/libudev* 2>/dev/null || echo 'No libudev files found'"
 ]
 
 [build.env]
