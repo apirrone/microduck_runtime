@@ -30,16 +30,19 @@ fn main() -> Result<()> {
     }
 
     println!("\nReading IMU data (Ctrl+C to stop):\n");
-    println!("{:>8} {:>8} {:>8} | {:>8} {:>8} {:>8}",
+    println!("{:>8} {:>8} {:>8} | {:>8} {:>8} {:>8} | {:>8} {:>8} {:>8}",
              "Gyro X", "Gyro Y", "Gyro Z",
+             "AccRaw X", "AccRaw Y", "AccRaw Z",
              "Grav X", "Grav Y", "Grav Z");
-    println!("{}", "-".repeat(65));
+    println!("{}", "-".repeat(100));
 
     loop {
+        let raw_accel = imu.read_raw_accelerometer()?;
         let data = imu.read()?;
 
-        println!("{:8.3} {:8.3} {:8.3} | {:8.3} {:8.3} {:8.3}",
+        println!("{:8.3} {:8.3} {:8.3} | {:8.3} {:8.3} {:8.3} | {:8.3} {:8.3} {:8.3}",
                  data.gyro[0], data.gyro[1], data.gyro[2],
+                 raw_accel[0], raw_accel[1], raw_accel[2],
                  data.accel[0], data.accel[1], data.accel[2]);
 
         thread::sleep(Duration::from_millis(50)); // 20 Hz

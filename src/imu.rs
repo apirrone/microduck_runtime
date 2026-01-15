@@ -159,6 +159,21 @@ impl ImuController {
         Ok(())
     }
 
+    /// Read raw accelerometer data in sensor frame (m/s²)
+    /// Returns [sensor_x, sensor_y, sensor_z]
+    pub fn read_raw_accelerometer(&mut self) -> Result<[f64; 3]> {
+        const BNO055_ACC_DATA_X_LSB: u8 = 0x08;
+        let mut accel_buffer = [0u8; 6];
+        self.read_bytes(BNO055_ACC_DATA_X_LSB, &mut accel_buffer)?;
+
+        // BNO055 accelerometer scale: 1 LSB = 0.01 m/s² (in m/s² mode, which is default in NDOF)
+        Ok([
+            i16::from_le_bytes([accel_buffer[0], accel_buffer[1]]) as f64 / 100.0,
+            i16::from_le_bytes([accel_buffer[2], accel_buffer[3]]) as f64 / 100.0,
+            i16::from_le_bytes([accel_buffer[4], accel_buffer[5]]) as f64 / 100.0,
+        ])
+    }
+
     /// Read current IMU data
     pub fn read(&mut self) -> Result<ImuData> {
         // Read accelerometer data (6 bytes: X, Y, Z as 16-bit signed integers)
