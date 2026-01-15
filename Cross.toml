@@ -6,8 +6,7 @@ pre-build = [
     "mkdir -p /.cache && chmod 777 /.cache",
     "mkdir -p /root/.cache && chmod 777 /root/.cache",
     "mkdir -p /tmp/.cache && chmod 777 /tmp/.cache",
-    "bash -c 'cat > /usr/lib/aarch64-linux-gnu/pkgconfig/libudev.pc <<EOF\nprefix=/usr\nexec_prefix=\\${prefix}\nlibdir=\\${exec_prefix}/lib/aarch64-linux-gnu\nincludedir=\\${prefix}/include\n\nName: libudev\nDescription: Library to access udev device information\nVersion: 1.0\nLibs: -L\\${libdir} -ludev\nCflags: -I\\${includedir}\nEOF\n'",
-    "echo 'Created libudev.pc:' && cat /usr/lib/aarch64-linux-gnu/pkgconfig/libudev.pc"
+    "printf 'prefix=/usr\\nexec_prefix=${prefix}\\nlibdir=${exec_prefix}/lib/aarch64-linux-gnu\\nincludedir=${prefix}/include\\n\\nName: libudev\\nDescription: Library to access udev device information\\nVersion: 1.0\\nLibs: -L${libdir} -ludev\\nCflags: -I${includedir}\\n' > /usr/lib/aarch64-linux-gnu/pkgconfig/libudev.pc"
 ]
 
 [build.env]
