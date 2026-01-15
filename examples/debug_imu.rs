@@ -258,7 +258,9 @@ fn main() -> Result<()> {
             euler_robot[2] * 180.0 / std::f64::consts::PI,
         ];
 
-        // Apply robot frame transformation to vectors (matches imu.rs)
+        // Apply robot frame transformation to vectors
+        // IMPORTANT: These transformations MUST match src/imu.rs::read()
+        // Source of truth: src/imu.rs lines 208-221
         // Empirically determined: [sensor_Y, -sensor_X, -sensor_Z] for accel/proj_grav
         let accel_raw_robot = [
             accel_raw[1],   // robot forward = sensor Y
