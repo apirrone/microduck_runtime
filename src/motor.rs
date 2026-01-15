@@ -34,10 +34,12 @@ pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [
     0.6, // left_hip_pitch
     -1.2, // left_knee
     0.5, // left_ankle
-    -0.6, // neck_pitch
-    0.5, // head_pitch
+    
+    0.0, // neck_pitch
+    0.0, // head_pitch
     0.0, // head_yaw
     0.0, // head_roll
+    
     0.0, // right_hip_yaw
     0.0, // right_hip_roll
     -0.6, // right_hip_pitch

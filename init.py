@@ -23,20 +23,20 @@ joints = {
 init_pose = [
     0.0,
     0.0,
-    0.75,
-    -1.5,
-    0.75,
-    
-    -0.5,
-    0.5,
-    0.0,
-    0.0,
+    0.6,
+    -1.2,
+    0.6,
     
     0.0,
     0.0,
-    -0.9,
-    1.5,
-    -0.75,
+    0.0,
+    0.0,
+    
+    0.0,
+    0.0,
+    -0.6,
+    1.2,
+    -0.7,
 ]
     
 
@@ -44,12 +44,16 @@ ids = [v for v in joints.values()]
 
 c.sync_write_torque_enable(ids, [True for _ in joints.keys()])
 c.sync_write_goal_position(ids, init_pose)
-# 
-# while True:
-    # 
-    # 
-    # print(c.sync_read_present_position(ids))
-    # 
-    # time.sleep(0.02)
-    # 
-    # 
+
+while True:
+    
+    
+    positions = c.sync_read_present_position(ids)
+    for i, name in enumerate(joints.keys()):
+        print(name, positions[i])
+    print("===")
+        
+      
+    
+    
+    time.sleep(0.1)

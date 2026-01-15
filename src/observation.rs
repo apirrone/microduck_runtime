@@ -5,7 +5,13 @@ use crate::motor::{MotorState, NUM_MOTORS, DEFAULT_POSITION};
 pub const OBSERVATION_SIZE: usize = 51;
 
 /// Observation vector structure
-/// Layout: [gyro(3), accel(3), command(3), joint_pos(14), joint_vel(14), last_action(14)]
+/// Layout: [gyro(3), projected_gravity(3), command(3), joint_pos(14), joint_vel(14), last_action(14)]
+/// - gyro: angular velocity in body frame (rad/s)
+/// - projected_gravity: gravity vector rotated to body frame (m/s²)
+/// - command: [lin_vel_x, lin_vel_y, ang_vel_z] velocity commands
+/// - joint_pos: relative to DEFAULT_POSITION (rad)
+/// - joint_vel: joint velocities (rad/s)
+/// - last_action: previous action outputs (rad offsets)
 #[derive(Debug, Clone)]
 pub struct Observation {
     data: [f32; OBSERVATION_SIZE],
@@ -22,19 +28,19 @@ impl Observation {
         let mut data = [0.0f32; OBSERVATION_SIZE];
         let mut idx = 0;
 
-        // Gyroscope (3)
+        // Angular velocity (3) - base_ang_vel in RL env
         for i in 0..3 {
             data[idx] = imu.gyro[i] as f32;
             idx += 1;
         }
 
-        // Accelerometer (3)
+        // Projected gravity (3) - gravity vector in body frame
         for i in 0..3 {
             data[idx] = imu.accel[i] as f32;
             idx += 1;
         }
 
-        // Command (3)
+        // Velocity commands (3) - [lin_vel_x, lin_vel_y, ang_vel_z]
         for i in 0..3 {
             data[idx] = command[i] as f32;
             idx += 1;
