@@ -29,14 +29,14 @@ const BNO055_POWER_MODE_NORMAL: u8 = 0x00;
 // I2C constants
 const I2C_SLAVE: u16 = 0x0703;
 
-/// IMU data containing gyroscope and accelerometer
+/// IMU data containing gyroscope and projected gravity
 #[derive(Debug, Clone, Copy)]
 pub struct ImuData {
     /// Gyroscope data [x, y, z] in rad/s (angular velocity in body frame)
     pub gyro: [f64; 3],
-    /// Accelerometer data [x, y, z] in m/s² (proper acceleration in body frame)
-    /// Measures specific force: gravity + contact forces + linear acceleration
-    /// When at rest: points up [0, 0, +9.81] (normal force from ground)
+    /// Projected gravity [x, y, z] in m/s² (gravity vector in body frame)
+    /// Computed as: -accelerometer (negated proper acceleration)
+    /// When at rest upright: points down [0, 0, -9.81]
     pub accel: [f64; 3],
 }
 
@@ -44,7 +44,7 @@ impl Default for ImuData {
     fn default() -> Self {
         Self {
             gyro: [0.0; 3],
-            accel: [0.0, 0.0, 9.81], // Default accelerometer (upright robot at rest, normal force)
+            accel: [0.0, 0.0, -9.81], // Default projected gravity (upright robot, gravity points down)
         }
     }
 }
@@ -196,16 +196,14 @@ impl ImuController {
             gyro_sensor[2],   // robot up = sensor Z
         ];
 
-        // Transform accelerometer to robot frame (send raw, not negated)
-        // Policy was trained with MuJoCo convention:
-        //   - pitch forward → positive X
-        //   - roll right → positive Y
-        //   - yaw left → positive Z
-        // Raw accelerometer matches this (normal force when at rest points up)
+        // Transform accelerometer to robot frame and negate to get projected gravity
+        // Accelerometer measures proper acceleration (normal force), opposite of gravity
+        // MuJoCo uses projected_gravity = quat_apply_inverse(quat, [0, 0, -9.81])
+        // This equals: -accelerometer (when stationary)
         let accel = [
-            accel_sensor[1],   // robot forward = sensor Y
-            -accel_sensor[0],  // robot left = -sensor X
-            accel_sensor[2],   // robot up = sensor Z
+            -accel_sensor[1],   // robot forward = -(sensor Y)
+            accel_sensor[0],    // robot left = -(-sensor X) = +(sensor X)
+            -accel_sensor[2],   // robot up = -(sensor Z)
         ];
 
         Ok(ImuData {
@@ -238,8 +236,8 @@ mod tests {
     fn test_imu_data_default() {
         let data = ImuData::default();
 
-        // Check default accelerometer (upright robot at rest, normal force points up)
-        assert_eq!(data.accel[2], 9.81);
+        // Check default projected gravity (upright robot, gravity points down)
+        assert_eq!(data.accel[2], -9.81);
         assert_eq!(data.gyro[0], 0.0);
     }
 
@@ -256,13 +254,13 @@ mod tests {
     }
 
     #[test]
-    fn test_accelerometer_upright() {
-        // Test that default ImuData has upward-pointing accelerometer
+    fn test_projected_gravity_upright() {
+        // Test that default ImuData has downward-pointing projected gravity
         let data = ImuData::default();
 
-        // When upright at rest, normal force points up
+        // When upright at rest, gravity points down
         assert!((data.accel[0] - 0.0).abs() < 1e-10);
         assert!((data.accel[1] - 0.0).abs() < 1e-10);
-        assert!((data.accel[2] - 9.81).abs() < 1e-10);
+        assert!((data.accel[2] - (-9.81)).abs() < 1e-10);
     }
 }
