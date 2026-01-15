@@ -13,15 +13,15 @@ path = "src/main.rs"
 
 [[bin]]
 name = "test_imu"
-path = "examples/test_imu.rs"
+path = "src/bin/test_imu.rs"
 
 [[bin]]
 name = "test_i2c_raw"
-path = "examples/test_i2c_raw.rs"
+path = "src/bin/test_i2c_raw.rs"
 
 [[bin]]
 name = "debug_imu"
-path = "examples/debug_imu.rs"
+path = "src/bin/debug_imu.rs"
 
 [dependencies]
 rustypot = "1.4.2"
