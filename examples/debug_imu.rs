@@ -208,9 +208,14 @@ fn main() -> Result<()> {
     println!();
 
     loop {
-        let (accel_raw, gyro, quat, proj_grav) = read_imu_detailed(&mut imu)?;
+        // Read raw sensor data for display
+        let accel_raw = imu.read_raw_accelerometer()?;
+        let (_, gyro_raw, quat, _) = read_imu_detailed(&mut imu)?;
 
-        // Convert quaternion to Euler angles
+        // Read the ACTUAL data that the policy sees (transformed in imu.rs)
+        let imu_data = imu.read()?;
+
+        // Convert quaternion to Euler angles (in sensor frame)
         let euler = quat_to_euler(quat);
         let euler_deg = [
             euler[0] * 180.0 / std::f64::consts::PI,
@@ -228,110 +233,46 @@ fn main() -> Result<()> {
         // print!("\x1B[2J\x1B[1;1H");
 
         println!("┌─────────────────────────────────────────────────────────────┐");
+        println!("│ SENSOR FRAME (BNO055 raw readings):                        │");
         println!("│ Accel_raw (m/s²):  X={:7.3}  Y={:7.3}  Z={:7.3} mag={:5.2} │",
                  accel_raw[0], accel_raw[1], accel_raw[2], accel_raw_mag);
         println!("│ Gyro (rad/s):      X={:7.3}  Y={:7.3}  Z={:7.3}      │",
-                 gyro[0], gyro[1], gyro[2]);
+                 gyro_raw[0], gyro_raw[1], gyro_raw[2]);
         println!("│ Quaternion [WXYZ]: {:6.3} {:6.3} {:6.3} {:6.3} (mag={:.3}) │",
                  quat[0], quat[1], quat[2], quat[3], quat_mag);
         println!("│ Euler (deg):       Roll={:7.2}° Pitch={:7.2}° Yaw={:7.2}° │",
                  euler_deg[0], euler_deg[1], euler_deg[2]);
-        println!("│ ProjGrav (m/s²):   X={:7.3}  Y={:7.3}  Z={:7.3}      │",
-                 proj_grav[0], proj_grav[1], proj_grav[2]);
-
-        // Transform quaternion from sensor frame to robot frame
-        // Mounting rotation: -90° around Z axis (sensor → robot)
-        // Robot X = Sensor Y, Robot Y = -Sensor X, Robot Z = Sensor Z
-        let q_mount = [
-            std::f64::consts::FRAC_1_SQRT_2,  // cos(-90°/2) = cos(-45°) = √2/2
-            0.0,
-            0.0,
-            -std::f64::consts::FRAC_1_SQRT_2, // sin(-90°/2) = sin(-45°) = -√2/2
-        ];
-        let quat_robot = quat_multiply(quat, q_mount);
-
-        // Compute Euler angles in robot frame
-        let euler_robot = quat_to_euler(quat_robot);
-        let euler_robot_deg = [
-            euler_robot[0] * 180.0 / std::f64::consts::PI,
-            euler_robot[1] * 180.0 / std::f64::consts::PI,
-            euler_robot[2] * 180.0 / std::f64::consts::PI,
-        ];
-
-        // Apply robot frame transformation to vectors
-        // IMPORTANT: These transformations MUST match src/imu.rs::read()
-        // Source of truth: src/imu.rs lines 208-221
-        // Empirically determined: [sensor_Y, -sensor_X, -sensor_Z] for accel/proj_grav
-        let accel_raw_robot = [
-            accel_raw[1],   // robot forward = sensor Y
-            -accel_raw[0],  // robot left = -sensor X
-            -accel_raw[2],  // robot up = -sensor Z (accel measures upward normal force)
-        ];
-        let gyro_robot = [
-            gyro[1],        // robot forward = sensor Y
-            -gyro[0],       // robot left = -sensor X
-            gyro[2],        // robot up = sensor Z (no negation for angular velocity)
-        ];
-        let proj_grav_robot = [
-            proj_grav[1],   // robot forward = sensor Y
-            -proj_grav[0],  // robot left = -sensor X
-            -proj_grav[2],  // robot up = -sensor Z (gravity points down)
-        ];
-
-        let accel_raw_robot_mag = (accel_raw_robot[0].powi(2) + accel_raw_robot[1].powi(2) + accel_raw_robot[2].powi(2)).sqrt();
 
         println!("├─────────────────────────────────────────────────────────────┤");
-        println!("│ TRANSFORMED TO ROBOT FRAME (X=fwd, Y=left, Z=up):          │");
-        println!("│ Accel_raw_robot:    X={:7.3}  Y={:7.3}  Z={:7.3} mag={:5.2} │",
-                 accel_raw_robot[0], accel_raw_robot[1], accel_raw_robot[2], accel_raw_robot_mag);
-        println!("│ Gyro_robot (rad/s): X={:7.3}  Y={:7.3}  Z={:7.3}      │",
-                 gyro_robot[0], gyro_robot[1], gyro_robot[2]);
-        println!("│ Euler_robot (deg):  Roll={:7.2}° Pitch={:7.2}° Yaw={:7.2}° │",
-                 euler_robot_deg[0], euler_robot_deg[1], euler_robot_deg[2]);
-        println!("│ ProjGrav_robot:     X={:7.3}  Y={:7.3}  Z={:7.3}      │",
-                 proj_grav_robot[0], proj_grav_robot[1], proj_grav_robot[2]);
+        println!("│ ROBOT FRAME (X=fwd, Y=left, Z=up) - POLICY INPUT:          │");
+        println!("│ Gyro (rad/s):       X={:7.3}  Y={:7.3}  Z={:7.3}      │",
+                 imu_data.gyro[0], imu_data.gyro[1], imu_data.gyro[2]);
+        println!("│ ProjGrav (norm):    X={:7.3}  Y={:7.3}  Z={:7.3}      │",
+                 imu_data.accel[0], imu_data.accel[1], imu_data.accel[2]);
 
         println!("└─────────────────────────────────────────────────────────────┘");
         println!();
 
         // Provide real-time hints based on data
-        if gyro[0].abs() > 0.1 || gyro[1].abs() > 0.1 || gyro[2].abs() > 0.1 {
-            println!("→ Motion detected! Gyro reading: [{:.2}, {:.2}, {:.2}] rad/s",
-                     gyro[0], gyro[1], gyro[2]);
+        if imu_data.gyro[0].abs() > 0.1 || imu_data.gyro[1].abs() > 0.1 || imu_data.gyro[2].abs() > 0.1 {
+            println!("→ Motion detected! Gyro: [{:.2}, {:.2}, {:.2}] rad/s",
+                     imu_data.gyro[0], imu_data.gyro[1], imu_data.gyro[2]);
         }
 
         if (quat_mag - 1.0).abs() > 0.1 {
             println!("⚠ Warning: Quaternion magnitude is {:.3}, expected ~1.0", quat_mag);
         }
 
-        let grav_mag_sensor = (proj_grav[0].powi(2) + proj_grav[1].powi(2) + proj_grav[2].powi(2)).sqrt();
-        let grav_mag_robot = (proj_grav_robot[0].powi(2) + proj_grav_robot[1].powi(2) + proj_grav_robot[2].powi(2)).sqrt();
-
-        if (grav_mag_sensor - 9.81).abs() > 0.5 {
-            println!("⚠ Warning: Projected gravity magnitude is {:.2} m/s², expected ~9.81", grav_mag_sensor);
-            println!("   This suggests the quaternion rotation is NOT preserving magnitude!");
-            println!("   Input magnitude: 9.81, Output magnitude: {:.2}", grav_mag_sensor);
-            println!("   Raw accelerometer magnitude: {:.2} m/s²", accel_raw_mag);
-
-            if (accel_raw_mag - 9.81).abs() > 0.5 {
-                println!("   → Raw accel is also >9.81, suggesting LINEAR ACCELERATION during motion");
-                println!("   → This is NORMAL when manually moving the robot!");
-            }
+        // Verify projected gravity is normalized (policy expects unit vector)
+        let proj_grav_mag = (imu_data.accel[0].powi(2) + imu_data.accel[1].powi(2) + imu_data.accel[2].powi(2)).sqrt();
+        if (proj_grav_mag - 1.0).abs() > 0.1 {
+            println!("⚠ Warning: Projected gravity magnitude is {:.3}, expected ~1.0 (unit vector)", proj_grav_mag);
         }
 
-        // Verify transformation doesn't change magnitude
-        if (grav_mag_sensor - grav_mag_robot).abs() > 0.01 {
-            println!("⚠ ERROR: Axis transformation changed magnitude from {:.2} to {:.2}!",
-                     grav_mag_sensor, grav_mag_robot);
-        }
-
-        // Compare raw accel vs projected gravity
-        let diff_mag = ((accel_raw[0] - proj_grav[0]).powi(2) +
-                       (accel_raw[1] - proj_grav[1]).powi(2) +
-                       (accel_raw[2] - proj_grav[2]).powi(2)).sqrt();
-        if diff_mag > 1.0 {
-            println!("ℹ  Difference between raw accel and projected gravity: {:.2} m/s²", diff_mag);
-            println!("   This suggests LINEAR ACCELERATION (robot is moving, not just oriented)");
+        if (accel_raw_mag - 9.81).abs() > 0.5 {
+            println!("→ Raw accel magnitude: {:.2} m/s² (not ~9.81)", accel_raw_mag);
+            println!("  This suggests LINEAR ACCELERATION during motion");
+            println!("  This is NORMAL when manually moving the robot!");
         }
 
         thread::sleep(Duration::from_millis(200)); // 5 Hz for readability
