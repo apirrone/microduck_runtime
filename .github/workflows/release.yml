@@ -35,12 +35,13 @@ jobs:
           CARGO_HOME: /tmp/cargo
         run: cross build --release --target aarch64-unknown-linux-gnu
 
-      - name: Prepare binary
+      - name: Prepare binaries
         run: |
           mkdir -p dist
           cp target/aarch64-unknown-linux-gnu/release/microduck_runtime dist/
+          cp target/aarch64-unknown-linux-gnu/release/test_imu dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu
           cd ..
 
       - name: Create Release
@@ -51,7 +52,12 @@ jobs:
           body: |
             ## Microduck Runtime ${{ github.ref_name }}
 
-            Cross-compiled binary for Raspberry Pi Zero 2W (ARM64).
+            Cross-compiled binaries for Raspberry Pi Zero 2W (ARM64).
+
+            ### Included Binaries
+
+            - **microduck_runtime**: Main robot control runtime
+            - **test_imu**: BNO055 IMU testing tool
 
             ### Installation
 
@@ -62,14 +68,18 @@ jobs:
             Or download and extract manually:
             ```bash
             tar xzf microduck_runtime-aarch64-linux.tar.gz
-            sudo mv microduck_runtime /usr/local/bin/
+            sudo mv microduck_runtime test_imu /usr/local/bin/
             ```
 
             ### Usage
 
             ```bash
+            # Main runtime
             microduck_runtime --help
-            microduck_runtime --dummy
+            microduck_runtime --dummy --port /dev/ttyAMA0
+
+            # Test IMU
+            test_imu
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

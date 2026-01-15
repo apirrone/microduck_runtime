@@ -86,16 +86,23 @@ if [ ! -f "$BINARY_NAME" ]; then
     exit 1
 fi
 
-# Make binary executable
-chmod +x "$BINARY_NAME"
+if [ ! -f "test_imu" ]; then
+    echo -e "${YELLOW}Warning: test_imu binary not found in archive.${NC}"
+fi
 
-# Install binary
+# Make binaries executable
+chmod +x "$BINARY_NAME"
+[ -f "test_imu" ] && chmod +x "test_imu"
+
+# Install binaries
 echo "Installing to $INSTALL_DIR..."
 if [ -w "$INSTALL_DIR" ]; then
     mv "$BINARY_NAME" "$INSTALL_DIR/"
+    [ -f "test_imu" ] && mv "test_imu" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
     sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
+    [ -f "test_imu" ] && sudo mv "test_imu" "$INSTALL_DIR/"
 fi
 
 # Cleanup
@@ -109,12 +116,19 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo -e "${GREEN}✓ Installation successful!${NC}"
     echo -e "Version: ${GREEN}$VERSION${NC}"
     echo ""
+    echo "Installed binaries:"
+    echo "  - $BINARY_NAME (main runtime)"
+    if command -v test_imu &> /dev/null; then
+        echo "  - test_imu (IMU testing tool)"
+    fi
+    echo ""
     echo "Usage:"
     echo "  $BINARY_NAME --help"
     echo "  $BINARY_NAME --dummy"
+    echo "  test_imu                    # Test BNO055 IMU"
     echo ""
     echo "Example:"
-    echo "  $BINARY_NAME --dummy --port /dev/ttyUSB0 --freq 50 --kp 400"
+    echo "  $BINARY_NAME --dummy --port /dev/ttyAMA0 --freq 50 --kp 400"
 else
     echo -e "${RED}Error: Installation failed.${NC}"
     echo "$BINARY_NAME not found in PATH."

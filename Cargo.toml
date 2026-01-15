@@ -11,6 +11,10 @@ path = "src/lib.rs"
 name = "microduck_runtime"
 path = "src/main.rs"
 
+[[bin]]
+name = "test_imu"
+path = "examples/test_imu.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = "2.0.0-rc.11"
