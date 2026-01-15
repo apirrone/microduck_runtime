@@ -19,6 +19,10 @@ path = "examples/test_imu.rs"
 name = "test_i2c_raw"
 path = "examples/test_i2c_raw.rs"
 
+[[bin]]
+name = "debug_imu"
+path = "examples/debug_imu.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }

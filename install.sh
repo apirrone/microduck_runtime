@@ -90,6 +90,10 @@ if [ ! -f "test_imu" ]; then
     echo -e "${YELLOW}Warning: test_imu binary not found in archive.${NC}"
 fi
 
+if [ ! -f "debug_imu" ]; then
+    echo -e "${YELLOW}Warning: debug_imu binary not found in archive.${NC}"
+fi
+
 if [ ! -f "test_i2c_raw" ]; then
     echo -e "${YELLOW}Warning: test_i2c_raw binary not found in archive.${NC}"
 fi
@@ -97,6 +101,7 @@ fi
 # Make binaries executable
 chmod +x "$BINARY_NAME"
 [ -f "test_imu" ] && chmod +x "test_imu"
+[ -f "debug_imu" ] && chmod +x "debug_imu"
 [ -f "test_i2c_raw" ] && chmod +x "test_i2c_raw"
 
 # Install ONNX Runtime library
@@ -119,11 +124,13 @@ echo "Installing to $INSTALL_DIR..."
 if [ -w "$INSTALL_DIR" ]; then
     mv "$BINARY_NAME" "$INSTALL_DIR/"
     [ -f "test_imu" ] && mv "test_imu" "$INSTALL_DIR/"
+    [ -f "debug_imu" ] && mv "debug_imu" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && mv "test_i2c_raw" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
     sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
     [ -f "test_imu" ] && sudo mv "test_imu" "$INSTALL_DIR/"
+    [ -f "debug_imu" ] && sudo mv "debug_imu" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && sudo mv "test_i2c_raw" "$INSTALL_DIR/"
 fi
 
@@ -143,6 +150,9 @@ if command -v $BINARY_NAME &> /dev/null; then
     if command -v test_imu &> /dev/null; then
         echo "  - test_imu (IMU testing tool)"
     fi
+    if command -v debug_imu &> /dev/null; then
+        echo "  - debug_imu (detailed IMU debugging tool)"
+    fi
     if command -v test_i2c_raw &> /dev/null; then
         echo "  - test_i2c_raw (I2C diagnostic tool)"
     fi
@@ -150,7 +160,8 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo "Usage:"
     echo "  $BINARY_NAME --help"
     echo "  $BINARY_NAME --dummy"
-    echo "  test_imu                    # Test BNO055 IMU"
+    echo "  test_imu                    # Test BNO055 IMU (basic)"
+    echo "  debug_imu                   # Debug IMU with Euler angles"
     echo "  test_i2c_raw                # Raw I2C diagnostic"
     echo ""
     echo "Example:"
