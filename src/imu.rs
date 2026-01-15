@@ -161,6 +161,19 @@ impl ImuController {
 
     /// Read current IMU data
     pub fn read(&mut self) -> Result<ImuData> {
+        // Read accelerometer data (6 bytes: X, Y, Z as 16-bit signed integers)
+        // This measures specific force (proper acceleration), which includes gravity + any contact forces
+        const BNO055_ACC_DATA_X_LSB: u8 = 0x08;
+        let mut accel_buffer = [0u8; 6];
+        self.read_bytes(BNO055_ACC_DATA_X_LSB, &mut accel_buffer)?;
+
+        // BNO055 accelerometer scale: 1 LSB = 0.01 m/s² (in m/s² mode, which is default in NDOF)
+        let accel_sensor = [
+            i16::from_le_bytes([accel_buffer[0], accel_buffer[1]]) as f64 / 100.0,
+            i16::from_le_bytes([accel_buffer[2], accel_buffer[3]]) as f64 / 100.0,
+            i16::from_le_bytes([accel_buffer[4], accel_buffer[5]]) as f64 / 100.0,
+        ];
+
         // Read gyroscope data (6 bytes: X, Y, Z as 16-bit signed integers)
         let mut gyro_buffer = [0u8; 6];
         self.read_bytes(BNO055_GYR_DATA_X_LSB, &mut gyro_buffer)?;
@@ -173,24 +186,6 @@ impl ImuController {
             i16::from_le_bytes([gyro_buffer[4], gyro_buffer[5]]) as f64 * scale,  // sensor Z
         ];
 
-        // Read quaternion data (8 bytes: W, X, Y, Z as 16-bit signed integers)
-        let mut quat_buffer = [0u8; 8];
-        self.read_bytes(BNO055_QUA_DATA_W_LSB, &mut quat_buffer)?;
-
-        // Convert to normalized quaternion (BNO055 scale: 1 LSB = 1/(2^14))
-        let scale = 1.0 / 16384.0;
-        let quat = [
-            i16::from_le_bytes([quat_buffer[0], quat_buffer[1]]) as f64 * scale, // w
-            i16::from_le_bytes([quat_buffer[2], quat_buffer[3]]) as f64 * scale, // x
-            i16::from_le_bytes([quat_buffer[4], quat_buffer[5]]) as f64 * scale, // y
-            i16::from_le_bytes([quat_buffer[6], quat_buffer[7]]) as f64 * scale, // z
-        ];
-
-        // Compute projected gravity: rotate world gravity [0, 0, -9.81] to body frame
-        // BNO055 quaternion represents body orientation, use direct quaternion (not conjugate)
-        let world_gravity = [0.0, 0.0, -9.81];
-        let projected_gravity_sensor = quat_rotate_vec(quat, world_gravity);
-
         // Transform from BNO055 sensor frame to robot frame
         // BNO055 (Android): X=right, Y=forward, Z=up (when looking at chip)
         // Robot expected: X=forward, Y=left, Z=up
@@ -201,15 +196,18 @@ impl ImuController {
             gyro_sensor[2],   // robot up = sensor Z
         ];
 
-        let projected_gravity = [
-            projected_gravity_sensor[1],   // robot forward = sensor Y
-            -projected_gravity_sensor[0],  // robot left = -sensor X
-            projected_gravity_sensor[2],   // robot up = sensor Z
+        // Use negative of accelerometer as "projected gravity"
+        // Accelerometer measures proper acceleration (normal force when at rest)
+        // Negating gives us gravity direction, which is what the policy expects
+        let accel = [
+            -accel_sensor[1],   // robot forward = -sensor Y
+            accel_sensor[0],    // robot left = -(-sensor X) = +sensor X
+            -accel_sensor[2],   // robot up = -sensor Z
         ];
 
         Ok(ImuData {
             gyro,
-            accel: projected_gravity,
+            accel,
         })
     }
 
