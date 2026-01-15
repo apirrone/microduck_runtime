@@ -140,10 +140,9 @@ fn read_imu_detailed(imu: &mut ImuController) -> Result<([f64; 3], [f64; 3], [f6
         i16::from_le_bytes([quat_buffer[6], quat_buffer[7]]) as f64 * scale, // z
     ];
 
-    // Compute projected gravity
-    let quat_conj = [quat[0], -quat[1], -quat[2], -quat[3]];
+    // Compute projected gravity using direct quaternion (not conjugate)
     let world_gravity = [0.0, 0.0, -9.81];
-    let projected_gravity = quat_rotate_vec(quat_conj, world_gravity);
+    let projected_gravity = quat_rotate_vec(quat, world_gravity);
 
     Ok((accel_raw, gyro, quat, projected_gravity))
 }

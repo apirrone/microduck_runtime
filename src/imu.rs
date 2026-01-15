@@ -187,10 +187,9 @@ impl ImuController {
         ];
 
         // Compute projected gravity: rotate world gravity [0, 0, -9.81] to body frame
-        // Use conjugate quaternion for inverse rotation: [w, -x, -y, -z]
-        let quat_conj = [quat[0], -quat[1], -quat[2], -quat[3]];
+        // BNO055 quaternion represents body orientation, use direct quaternion (not conjugate)
         let world_gravity = [0.0, 0.0, -9.81];
-        let projected_gravity_sensor = quat_rotate_vec(quat_conj, world_gravity);
+        let projected_gravity_sensor = quat_rotate_vec(quat, world_gravity);
 
         // Transform from BNO055 sensor frame to robot frame
         // BNO055 (Android): X=right, Y=forward, Z=up (when looking at chip)
