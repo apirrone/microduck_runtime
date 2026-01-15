@@ -29,14 +29,14 @@ const BNO055_POWER_MODE_NORMAL: u8 = 0x00;
 // I2C constants
 const I2C_SLAVE: u16 = 0x0703;
 
-/// IMU data containing gyroscope and projected gravity
+/// IMU data containing gyroscope and normalized projected gravity
 #[derive(Debug, Clone, Copy)]
 pub struct ImuData {
     /// Gyroscope data [x, y, z] in rad/s (angular velocity in body frame)
     pub gyro: [f64; 3],
-    /// Projected gravity [x, y, z] in m/s² (gravity vector in body frame)
-    /// Computed as: -accelerometer (negated proper acceleration)
-    /// When at rest upright: points down [0, 0, -9.81]
+    /// Normalized projected gravity [x, y, z] (unit vector in body frame)
+    /// Computed as: normalize(-accelerometer)
+    /// When at rest upright: points down [0, 0, -1]
     pub accel: [f64; 3],
 }
 
@@ -44,7 +44,7 @@ impl Default for ImuData {
     fn default() -> Self {
         Self {
             gyro: [0.0; 3],
-            accel: [0.0, 0.0, -9.81], // Default projected gravity (upright robot, gravity points down)
+            accel: [0.0, 0.0, -1.0], // Default normalized projected gravity (upright robot, unit vector pointing down)
         }
     }
 }
@@ -200,11 +200,23 @@ impl ImuController {
         // Accelerometer measures proper acceleration (normal force), opposite of gravity
         // MuJoCo uses projected_gravity = quat_apply_inverse(quat, [0, 0, -9.81])
         // Transformation: Robot = (sensor_Y, -sensor_X, sensor_Z), then negate for projected gravity
-        let accel = [
+        let accel_raw = [
             accel_sensor[1],    // robot forward = sensor Y (no negation - already correct sign)
             -accel_sensor[0],   // robot left = -sensor X
             -accel_sensor[2],   // robot up = -sensor Z (negate to get gravity direction)
         ];
+
+        // Normalize to unit length (MuJoCo uses normalized projected gravity)
+        let mag = (accel_raw[0].powi(2) + accel_raw[1].powi(2) + accel_raw[2].powi(2)).sqrt();
+        let accel = if mag > 0.1 {
+            [
+                accel_raw[0] / mag,
+                accel_raw[1] / mag,
+                accel_raw[2] / mag,
+            ]
+        } else {
+            [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
+        };
 
         Ok(ImuData {
             gyro,
@@ -236,8 +248,8 @@ mod tests {
     fn test_imu_data_default() {
         let data = ImuData::default();
 
-        // Check default projected gravity (upright robot, gravity points down)
-        assert_eq!(data.accel[2], -9.81);
+        // Check default normalized projected gravity (upright robot, unit vector pointing down)
+        assert_eq!(data.accel[2], -1.0);
         assert_eq!(data.gyro[0], 0.0);
     }
 
@@ -255,12 +267,16 @@ mod tests {
 
     #[test]
     fn test_projected_gravity_upright() {
-        // Test that default ImuData has downward-pointing projected gravity
+        // Test that default ImuData has downward-pointing normalized projected gravity
         let data = ImuData::default();
 
-        // When upright at rest, gravity points down
+        // When upright at rest, gravity points down as unit vector
         assert!((data.accel[0] - 0.0).abs() < 1e-10);
         assert!((data.accel[1] - 0.0).abs() < 1e-10);
-        assert!((data.accel[2] - (-9.81)).abs() < 1e-10);
+        assert!((data.accel[2] - (-1.0)).abs() < 1e-10);
+
+        // Verify it's normalized (magnitude = 1)
+        let mag = (data.accel[0].powi(2) + data.accel[1].powi(2) + data.accel[2].powi(2)).sqrt();
+        assert!((mag - 1.0).abs() < 1e-10);
     }
 }
