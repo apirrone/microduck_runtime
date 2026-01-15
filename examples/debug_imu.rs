@@ -31,6 +31,20 @@ fn quat_to_euler(quat: [f64; 4]) -> [f64; 3] {
     [roll, pitch, yaw]
 }
 
+/// Quaternion multiplication: result = q1 * q2
+/// Both quaternions in [w, x, y, z] format
+fn quat_multiply(q1: [f64; 4], q2: [f64; 4]) -> [f64; 4] {
+    let [w1, x1, y1, z1] = q1;
+    let [w2, x2, y2, z2] = q2;
+
+    [
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    ]
+}
+
 /// Rotate a vector by a quaternion (same as in imu.rs)
 fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
     let [w, qx, qy, qz] = quat;
@@ -226,7 +240,26 @@ fn main() -> Result<()> {
         println!("│ ProjGrav (m/s²):   X={:7.3}  Y={:7.3}  Z={:7.3}      │",
                  proj_grav[0], proj_grav[1], proj_grav[2]);
 
-        // Apply robot frame transformation (same as in imu.rs)
+        // Transform quaternion from sensor frame to robot frame
+        // Mounting rotation: -90° around Z axis (sensor → robot)
+        // Robot X = Sensor Y, Robot Y = -Sensor X, Robot Z = Sensor Z
+        let q_mount = [
+            std::f64::consts::FRAC_1_SQRT_2,  // cos(-90°/2) = cos(-45°) = √2/2
+            0.0,
+            0.0,
+            -std::f64::consts::FRAC_1_SQRT_2, // sin(-90°/2) = sin(-45°) = -√2/2
+        ];
+        let quat_robot = quat_multiply(quat, q_mount);
+
+        // Compute Euler angles in robot frame
+        let euler_robot = quat_to_euler(quat_robot);
+        let euler_robot_deg = [
+            euler_robot[0] * 180.0 / std::f64::consts::PI,
+            euler_robot[1] * 180.0 / std::f64::consts::PI,
+            euler_robot[2] * 180.0 / std::f64::consts::PI,
+        ];
+
+        // Apply robot frame transformation to vectors (same as in imu.rs)
         let accel_raw_robot = [
             accel_raw[1],   // robot forward = sensor Y
             -accel_raw[0],  // robot left = -sensor X
@@ -251,6 +284,8 @@ fn main() -> Result<()> {
                  accel_raw_robot[0], accel_raw_robot[1], accel_raw_robot[2], accel_raw_robot_mag);
         println!("│ Gyro_robot (rad/s): X={:7.3}  Y={:7.3}  Z={:7.3}      │",
                  gyro_robot[0], gyro_robot[1], gyro_robot[2]);
+        println!("│ Euler_robot (deg):  Roll={:7.2}° Pitch={:7.2}° Yaw={:7.2}° │",
+                 euler_robot_deg[0], euler_robot_deg[1], euler_robot_deg[2]);
         println!("│ ProjGrav_robot:     X={:7.3}  Y={:7.3}  Z={:7.3}      │",
                  proj_grav_robot[0], proj_grav_robot[1], proj_grav_robot[2]);
 
