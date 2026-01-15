@@ -201,22 +201,23 @@ impl ImuController {
             i16::from_le_bytes([gyro_buffer[4], gyro_buffer[5]]) as f64 * scale,  // sensor Z
         ];
 
-        // Transform both gyro and accelerometer using consistent coordinate mapping
-        // Physical mounting: Sensor Y→Robot X, Sensor X (right)→Robot Y (left), Sensor Z→Robot Z
-        // Transformation: robot = [sensor_Y, -sensor_X, -sensor_Z]
-        // The -sensor_X flips from right to left
+        // Transform gyroscope to robot frame
+        // Empirically determined from sensor measurements:
+        // - Sensor Y → Robot X (forward)
+        // - Sensor X (right) → Robot Y (left, negated)
+        // - Sensor Z (up) → Robot Z (up, no negation for gyro)
         let gyro = [
-            gyro_sensor[1],    // robot X (forward) = sensor Y
-            -gyro_sensor[0],   // robot Y (left) = -sensor X (flip right to left)
-            -gyro_sensor[2],   // robot Z (up) = -sensor Z
+            gyro_sensor[1],    // robot X = sensor Y
+            -gyro_sensor[0],   // robot Y = -sensor X
+            gyro_sensor[2],    // robot Z = sensor Z (CCW rotation gives positive)
         ];
 
         // Transform accelerometer to get projected gravity
-        // Uses same transformation as gyro for consistency
+        // Note: Z axis handling differs from gyro due to gravity direction
         let accel_raw = [
-            accel_sensor[1],    // projected gravity X = sensor Y
-            -accel_sensor[0],   // projected gravity Y = -sensor X (flip right to left)
-            -accel_sensor[2],   // projected gravity Z = -sensor Z
+            accel_sensor[1],    // proj grav X = sensor Y
+            -accel_sensor[0],   // proj grav Y = -sensor X
+            -accel_sensor[2],   // proj grav Z = -sensor Z (gravity points down)
         ];
 
         // Normalize to unit length (MuJoCo uses normalized projected gravity)

@@ -26,11 +26,11 @@ The BNO055 uses Android coordinate system:
 - Sensor X axis → Robot Y axis (flipped from right to left)
 - Sensor Z axis → Robot Z axis (up)
 
-**Applied transformations:**
-- Gyro: `robot = (-sensor_Y, -sensor_X, sensor_Z)`
-- Projected gravity: `robot = (sensor_Y, sensor_X, -sensor_Z)`
+**Applied transformations (empirically determined):**
+- Gyro: `[sensor_Y, -sensor_X, sensor_Z]`
+- Projected gravity: `[sensor_Y, -sensor_X, -sensor_Z]`
 
-The difference accounts for the negation from accelerometer (normal force) to gravity.
+Note: Z axis handling differs between gyro and projected gravity due to gravity direction.
 
 ## Using the Debug Tool
 
