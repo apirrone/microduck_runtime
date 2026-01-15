@@ -1,7 +1,7 @@
 from rustypot import Xl330PyController
 import time
 
-c = Xl330PyController("/dev/ttyACM0", baudrate=1000000, timeout=0.01)
+c = Xl330PyController("/dev/ttyAMA0", baudrate=1000000, timeout=0.01)
 
 joints = {
     "left_hip_yaw": 20,
