@@ -258,21 +258,22 @@ fn main() -> Result<()> {
             euler_robot[2] * 180.0 / std::f64::consts::PI,
         ];
 
-        // Apply robot frame transformation to vectors (same as in imu.rs)
+        // Apply robot frame transformation to vectors (matches imu.rs)
+        // Empirically determined: [sensor_Y, -sensor_X, -sensor_Z] for accel/proj_grav
         let accel_raw_robot = [
             accel_raw[1],   // robot forward = sensor Y
             -accel_raw[0],  // robot left = -sensor X
-            accel_raw[2],   // robot up = sensor Z
+            -accel_raw[2],  // robot up = -sensor Z (accel measures upward normal force)
         ];
         let gyro_robot = [
-            gyro[1],   // robot forward = sensor Y
-            -gyro[0],  // robot left = -sensor X
-            gyro[2],   // robot up = sensor Z
+            gyro[1],        // robot forward = sensor Y
+            -gyro[0],       // robot left = -sensor X
+            gyro[2],        // robot up = sensor Z (no negation for angular velocity)
         ];
         let proj_grav_robot = [
             proj_grav[1],   // robot forward = sensor Y
             -proj_grav[0],  // robot left = -sensor X
-            proj_grav[2],   // robot up = sensor Z
+            -proj_grav[2],  // robot up = -sensor Z (gravity points down)
         ];
 
         let accel_raw_robot_mag = (accel_raw_robot[0].powi(2) + accel_raw_robot[1].powi(2) + accel_raw_robot[2].powi(2)).sqrt();
