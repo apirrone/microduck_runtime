@@ -7,7 +7,7 @@ pub const OBSERVATION_SIZE: usize = 51;
 /// Observation vector structure
 /// Layout: [gyro(3), projected_gravity(3), command(3), joint_pos(14), joint_vel(14), last_action(14)]
 /// - gyro: angular velocity in body frame (rad/s)
-/// - projected_gravity: gravity vector rotated to body frame (m/s²)
+/// - projected_gravity: normalized gravity vector in body frame (unit vector)
 /// - command: [lin_vel_x, lin_vel_y, ang_vel_z] velocity commands
 /// - joint_pos: relative to DEFAULT_POSITION (rad)
 /// - joint_vel: joint velocities (rad/s)

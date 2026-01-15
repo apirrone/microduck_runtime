@@ -199,11 +199,12 @@ impl ImuController {
         // Transform accelerometer to robot frame and negate to get projected gravity
         // Accelerometer measures proper acceleration (normal force), opposite of gravity
         // MuJoCo uses projected_gravity = quat_apply_inverse(quat, [0, 0, -9.81])
-        // Transformation: Robot = (sensor_Y, -sensor_X, sensor_Z), then negate for projected gravity
+        // Accel_robot_frame = (sensor_Y, -sensor_X, sensor_Z)
+        // Projected_gravity = -Accel_robot_frame = (-sensor_Y, sensor_X, -sensor_Z)
         let accel_raw = [
-            accel_sensor[1],    // robot forward = sensor Y (no negation - already correct sign)
-            -accel_sensor[0],   // robot left = -sensor X
-            -accel_sensor[2],   // robot up = -sensor Z (negate to get gravity direction)
+            -accel_sensor[1],   // -sensor Y
+            accel_sensor[0],    // sensor X (robot left = -(-sensor X))
+            -accel_sensor[2],   // -sensor Z
         ];
 
         // Normalize to unit length (MuJoCo uses normalized projected gravity)
