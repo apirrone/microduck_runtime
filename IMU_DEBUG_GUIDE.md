@@ -14,23 +14,31 @@ Rotations are defined as:
 - **Pitch**: rotation around Y axis (left) - tilting forward/back
 - **Yaw**: rotation around Z axis (up) - rotating horizontally
 
-## BNO055 Frame Convention and Mounting
+## BNO055 Frame Convention and Hardware Remapping
 
 The BNO055 uses Android coordinate system:
 - **X = right** (when looking at chip)
 - **Y = forward** (when looking at chip)
 - **Z = up** (out of chip surface)
 
-**On the microduck robot, the sensor is mounted with:**
-- Sensor Y axis → Robot X axis (forward, with sign adjustment)
-- Sensor X axis → Robot Y axis (flipped from right to left)
-- Sensor Z axis → Robot Z axis (up)
+**Hardware axis remapping (configured in BNO055 chip):**
 
-**Applied transformations (empirically determined):**
-- Gyro: `[sensor_Y, -sensor_X, sensor_Z]`
-- Projected gravity: `[sensor_Y, -sensor_X, -sensor_Z]`
+The IMU is configured using the bno055 crate's hardware axis remapping:
+```rust
+AxisRemap::builder()
+    .swap_x_with(BNO055AxisConfig::AXIS_AS_Y)  // Swap X and Y
+    .build()
 
-Note: Z axis handling differs between gyro and projected gravity due to gravity direction.
+imu.set_axis_sign(BNO055AxisSign::Y_NEGATIVE)  // Flip Y sign
+```
+
+This results in the robot frame (X=forward, Y=left, Z=up):
+- **Robot X** = Sensor Y (forward)
+- **Robot Y** = -Sensor X (left, negated from right)
+- **Robot Z** = Sensor Z (up)
+
+All sensor readings (accelerometer, gyroscope, quaternions) are automatically
+transformed by the hardware. No software transformation is needed.
 
 ## Using the Debug Tool
 
