@@ -120,8 +120,20 @@ impl ImuController {
         let calib_bytes = fs::read(&calib_path)
             .context(format!("Failed to read calibration file: {}", calib_path.display()))?;
 
+        // Verify correct size (22 bytes for BNO055 calibration)
+        if calib_bytes.len() != 22 {
+            return Err(anyhow::anyhow!(
+                "Invalid calibration file size: {} bytes (expected 22)",
+                calib_bytes.len()
+            ));
+        }
+
+        // Convert Vec to fixed-size array
+        let mut buf = [0u8; 22];
+        buf.copy_from_slice(&calib_bytes);
+
         // Convert bytes to BNO055Calibration
-        let calibration = BNO055Calibration::from_buf(&calib_bytes);
+        let calibration = BNO055Calibration::from_buf(&buf);
 
         // Apply calibration to sensor
         self.imu.set_calibration_profile(calibration, &mut self.delay)

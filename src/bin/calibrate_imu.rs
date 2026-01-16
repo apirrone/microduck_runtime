@@ -30,9 +30,9 @@ fn main() -> Result<()> {
 
     // Initialize BNO055
     println!("Initializing BNO055...");
-    let mut imu = bno055::Bno055::new(i2c)
-        .with_alternative_address()
-        .init(&mut delay)
+    let mut imu = bno055::Bno055::new(i2c).with_alternative_address();
+
+    imu.init(&mut delay)
         .map_err(|e| anyhow::anyhow!("Failed to initialize BNO055: {:?}", e))?;
 
     // Configure axis remapping to match robot coordinate system
@@ -93,7 +93,6 @@ fn main() -> Result<()> {
 
     let start_time = std::time::Instant::now();
     let mut last_status = (0, 0, 0, 0);
-    let mut all_calibrated = false;
 
     loop {
         let calib = imu
@@ -136,7 +135,6 @@ fn main() -> Result<()> {
 
         // Check if all sensors are fully calibrated
         if calib.sys == 3 && calib.gyr == 3 && calib.acc == 3 && calib.mag == 3 {
-            all_calibrated = true;
             break;
         }
 
@@ -146,40 +144,38 @@ fn main() -> Result<()> {
     // Move cursor down past the status display
     println!("\n\n\n\n\n");
 
-    if all_calibrated {
-        println!();
-        println!("╔══════════════════════════════════════════════════════════════╗");
-        println!("║              ✓ CALIBRATION COMPLETE!                        ║");
-        println!("╚══════════════════════════════════════════════════════════════╝");
-        println!();
-        println!("Saving calibration profile...");
+    println!();
+    println!("╔══════════════════════════════════════════════════════════════╗");
+    println!("║              ✓ CALIBRATION COMPLETE!                        ║");
+    println!("╚══════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("Saving calibration profile...");
 
-        // Read calibration profile from sensor
-        let calibration = imu
-            .calibration_profile(&mut delay)
-            .map_err(|e| anyhow::anyhow!("Failed to read calibration profile: {:?}", e))?;
+    // Read calibration profile from sensor
+    let calibration = imu
+        .calibration_profile(&mut delay)
+        .map_err(|e| anyhow::anyhow!("Failed to read calibration profile: {:?}", e))?;
 
-        // Save to file
-        let calib_path = get_calibration_path();
+    // Save to file
+    let calib_path = get_calibration_path();
 
-        // Create directory if it doesn't exist
-        if let Some(parent) = calib_path.parent() {
-            fs::create_dir_all(parent)
-                .context("Failed to create calibration directory")?;
-        }
-
-        // Write calibration data
-        let calib_bytes = calibration.as_bytes();
-        fs::write(&calib_path, calib_bytes)
-            .context("Failed to write calibration file")?;
-
-        println!("✓ Calibration saved to: {}", calib_path.display());
-        println!();
-        println!("All programs will now automatically load this calibration.");
-        println!("You can recalibrate anytime by running this tool again.");
-        println!();
-        println!("Calibration complete! Total time: {}s", start_time.elapsed().as_secs());
+    // Create directory if it doesn't exist
+    if let Some(parent) = calib_path.parent() {
+        fs::create_dir_all(parent)
+            .context("Failed to create calibration directory")?;
     }
+
+    // Write calibration data
+    let calib_bytes = calibration.as_bytes();
+    fs::write(&calib_path, calib_bytes)
+        .context("Failed to write calibration file")?;
+
+    println!("✓ Calibration saved to: {}", calib_path.display());
+    println!();
+    println!("All programs will now automatically load this calibration.");
+    println!("You can recalibrate anytime by running this tool again.");
+    println!();
+    println!("Calibration complete! Total time: {}s", start_time.elapsed().as_secs());
 
     Ok(())
 }
