@@ -29,10 +29,10 @@ fn main() -> Result<()> {
 
     // Configure axis remapping
     // We want: Robot = [Sensor_Y, -Sensor_X, Sensor_Z]
-    // So: X axis should read from Y, Y axis should read from X, Z stays as Z
+    // Swap X with Y: this makes X read from Y AND Y read from X (bidirectional)
+    // Z stays as Z (no swap needed)
     let remap = AxisRemap::builder()
-        .swap_x_with(BNO055AxisConfig::AXIS_AS_Y)  // Robot X = Sensor Y
-        .swap_y_with(BNO055AxisConfig::AXIS_AS_X)  // Robot Y = Sensor X
+        .swap_x_with(BNO055AxisConfig::AXIS_AS_Y)  // Swap X and Y axes
         .build().map_err(|_| anyhow::anyhow!("Failed to build axis remap"))?;
 
     imu.set_axis_remap(remap).map_err(|e| anyhow::anyhow!("{:?}", e))?;
