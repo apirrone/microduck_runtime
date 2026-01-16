@@ -58,12 +58,13 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/microduck_runtime dist/
           cp target/aarch64-unknown-linux-gnu/release/test_imu dist/
           cp target/aarch64-unknown-linux-gnu/release/test_imu2 dist/
+          cp target/aarch64-unknown-linux-gnu/release/test_imu3 dist/
           cp target/aarch64-unknown-linux-gnu/release/test_i2c_raw dist/
           cp target/aarch64-unknown-linux-gnu/release/debug_imu dist/
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_i2c_raw debug_imu libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw debug_imu libonnxruntime.so*
           cd ..
 
       - name: Create Release
@@ -80,7 +81,8 @@ jobs:
 
             - **microduck_runtime**: Main robot control runtime
             - **test_imu**: BNO055 IMU testing tool
-            - **test_imu2**: Simple IMU axis remapping verification tool
+            - **test_imu2**: Simple IMU axis remapping verification tool (manual transformation)
+            - **test_imu3**: Hardware-based IMU axis remapping using bno055 crate
             - **debug_imu**: Detailed IMU debugging tool with Euler angles
             - **test_i2c_raw**: Raw I2C diagnostic tool
             - **libonnxruntime.so**: ONNX Runtime library (required for policy inference)
