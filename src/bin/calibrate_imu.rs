@@ -51,6 +51,30 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to set axis sign: {:?}", e))?;
 
     println!("✓ Axis remapping configured");
+
+    // Set to NDOF mode for calibration (enables all sensors and fusion)
+    println!("Setting NDOF mode for calibration...");
+    imu.set_mode(bno055::BNO055OperationMode::NDOF, &mut delay)
+        .map_err(|e| anyhow::anyhow!("Failed to set NDOF mode: {:?}", e))?;
+
+    println!("✓ NDOF mode enabled");
+
+    // Give the sensor a moment to stabilize in NDOF mode
+    thread::sleep(Duration::from_millis(500));
+
+    // Verify sensors are working
+    println!("Verifying sensors are responding...");
+    match imu.accel_data() {
+        Ok(accel) => println!("  ✓ Accelerometer: [{:.2}, {:.2}, {:.2}] m/s²", accel.x, accel.y, accel.z),
+        Err(e) => {
+            println!("  ✗ Accelerometer not responding: {:?}", e);
+            println!("  Check I2C connection!");
+        }
+    }
+    match imu.gyro_data() {
+        Ok(gyro) => println!("  ✓ Gyroscope: [{:.2}, {:.2}, {:.2}] dps/16", gyro.x, gyro.y, gyro.z),
+        Err(e) => println!("  ✗ Gyroscope not responding: {:?}", e),
+    }
     println!();
 
     // Display calibration instructions
@@ -58,33 +82,36 @@ fn main() -> Result<()> {
     println!("║                  CALIBRATION INSTRUCTIONS                    ║");
     println!("╚══════════════════════════════════════════════════════════════╝");
     println!();
-    println!("The BNO055 requires calibration of 4 sensors:");
+    println!("The BNO055 requires calibration of 4 sensors.");
+    println!("Follow this order for best results:");
     println!();
-    println!("1. MAGNETOMETER (Mag)");
-    println!("   • Make random movements with the robot");
-    println!("   • Move it in figure-8 patterns");
-    println!("   • Rotate it around all axes");
+    println!("STEP 1: GYROSCOPE (should calibrate within ~5 seconds)");
+    println!("   • Place robot on a stable surface");
+    println!("   • Keep it COMPLETELY STILL");
+    println!("   • Wait for Gyro level to reach 3");
     println!();
-    println!("2. ACCELEROMETER (Accel) - MOST IMPORTANT!");
-    println!("   • Place robot in 6 different orientations");
-    println!("   • Hold each position steady for a few seconds:");
-    println!("     - Flat on table (standing)");
-    println!("     - On left side");
-    println!("     - On right side");
-    println!("     - On back");
-    println!("     - On front");
-    println!("     - Upside down (be careful!)");
+    println!("STEP 2: ACCELEROMETER - MOST IMPORTANT!");
+    println!("   • After Gyro reaches 3, place robot in 6 orientations:");
+    println!("     1. Flat on table (standing) - hold 3 seconds");
+    println!("     2. On left side - hold 3 seconds");
+    println!("     3. On right side - hold 3 seconds");
+    println!("     4. On back - hold 3 seconds");
+    println!("     5. On front - hold 3 seconds");
+    println!("     6. Upside down - hold 3 seconds");
     println!();
-    println!("3. GYROSCOPE (Gyro)");
-    println!("   • Keep robot stationary for a few seconds");
+    println!("STEP 3: MAGNETOMETER");
+    println!("   • Move away from metal objects and electronics");
+    println!("   • Move robot in figure-8 patterns");
+    println!("   • Rotate it smoothly around all three axes");
+    println!("   • Continue until Mag reaches 3");
     println!();
-    println!("4. SYSTEM (Sys)");
-    println!("   • Overall fusion calibration");
-    println!("   • Automatically calibrated when others are done");
+    println!("STEP 4: SYSTEM (automatic)");
+    println!("   • Calibrates automatically when others complete");
     println!();
-    println!("Starting calibration in 3 seconds...");
+    println!("IMPORTANT: Start with the robot STILL for gyro calibration!");
+    println!("Starting in 5 seconds...");
     println!();
-    thread::sleep(Duration::from_secs(3));
+    thread::sleep(Duration::from_secs(5));
 
     // Calibration loop
     println!("╔══════════════════════════════════════════════════════════════╗");
