@@ -27,24 +27,24 @@ pub const MOTOR_IDS: [u8; NUM_MOTORS] = [
 
 /// Default/initial position for all motors (bent legs position)
 /// Order matches MOTOR_IDS: left leg (5), neck/head (4), right leg (5)
-/// TODO: Set these to actual default positions for your robot
+/// These values MUST match HOME_FRAME in microduck_constants.py for consistency with RL training
 pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [
     0.0, // left_hip_yaw
     0.0, // left_hip_roll
     0.6, // left_hip_pitch
     -1.2, // left_knee
-    0.5, // left_ankle
-    
+    0.6, // left_ankle (was 0.5 - FIXED to match training)
+
     0.0, // neck_pitch
     0.0, // head_pitch
     0.0, // head_yaw
     0.0, // head_roll
-    
+
     0.0, // right_hip_yaw
     0.0, // right_hip_roll
     -0.6, // right_hip_pitch
     1.2, // right_knee
-    -0.7, // right_ankle
+    -0.6, // right_ankle (was -0.7 - FIXED to match training)
 ];
 
 /// Conversion factor for velocity: 0.229 RPM per count * (2π / 60) for rad/s
