@@ -27,6 +27,10 @@ path = "src/bin/debug_imu.rs"
 name = "test_imu2"
 path = "src/bin/test_imu2.rs"
 
+[[bin]]
+name = "test_imu3"
+path = "src/bin/test_imu3.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
@@ -36,3 +40,5 @@ serialport = "4.8"
 clap = { version = "4.5", features = ["derive"] }
 libc = "0.2"
 ndarray = "0.15"
+bno055 = "0.4"
+linux-embedded-hal = "0.4"
