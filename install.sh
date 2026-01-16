@@ -110,6 +110,10 @@ if [ ! -f "debug_motor_speed" ]; then
     echo -e "${YELLOW}Warning: debug_motor_speed binary not found in archive.${NC}"
 fi
 
+if [ ! -f "debug_policy_io" ]; then
+    echo -e "${YELLOW}Warning: debug_policy_io binary not found in archive.${NC}"
+fi
+
 if [ ! -f "test_i2c_raw" ]; then
     echo -e "${YELLOW}Warning: test_i2c_raw binary not found in archive.${NC}"
 fi
@@ -122,6 +126,7 @@ chmod +x "$BINARY_NAME"
 [ -f "debug_imu" ] && chmod +x "debug_imu"
 [ -f "debug_imu_observations" ] && chmod +x "debug_imu_observations"
 [ -f "debug_motor_speed" ] && chmod +x "debug_motor_speed"
+[ -f "debug_policy_io" ] && chmod +x "debug_policy_io"
 [ -f "test_i2c_raw" ] && chmod +x "test_i2c_raw"
 
 # Install ONNX Runtime library
@@ -149,6 +154,7 @@ if [ -w "$INSTALL_DIR" ]; then
     [ -f "debug_imu" ] && mv "debug_imu" "$INSTALL_DIR/"
     [ -f "debug_imu_observations" ] && mv "debug_imu_observations" "$INSTALL_DIR/"
     [ -f "debug_motor_speed" ] && mv "debug_motor_speed" "$INSTALL_DIR/"
+    [ -f "debug_policy_io" ] && mv "debug_policy_io" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && mv "test_i2c_raw" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
@@ -159,6 +165,7 @@ else
     [ -f "debug_imu" ] && sudo mv "debug_imu" "$INSTALL_DIR/"
     [ -f "debug_imu_observations" ] && sudo mv "debug_imu_observations" "$INSTALL_DIR/"
     [ -f "debug_motor_speed" ] && sudo mv "debug_motor_speed" "$INSTALL_DIR/"
+    [ -f "debug_policy_io" ] && sudo mv "debug_policy_io" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && sudo mv "test_i2c_raw" "$INSTALL_DIR/"
 fi
 
@@ -193,6 +200,9 @@ if command -v $BINARY_NAME &> /dev/null; then
     if command -v debug_motor_speed &> /dev/null; then
         echo "  - debug_motor_speed (motor speed verification)"
     fi
+    if command -v debug_policy_io &> /dev/null; then
+        echo "  - debug_policy_io (policy I/O logger)"
+    fi
     if command -v test_i2c_raw &> /dev/null; then
         echo "  - test_i2c_raw (I2C diagnostic tool)"
     fi
@@ -206,6 +216,7 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo "  debug_imu                   # Debug IMU with Euler angles"
     echo "  debug_imu_observations      # Monitor exact policy observations"
     echo "  debug_motor_speed           # Verify motor velocity units"
+    echo "  debug_policy_io             # Log policy inputs/outputs to CSV"
     echo "  test_i2c_raw                # Raw I2C diagnostic"
     echo ""
     echo "Example:"

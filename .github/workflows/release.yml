@@ -63,10 +63,11 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/debug_imu dist/
           cp target/aarch64-unknown-linux-gnu/release/debug_imu_observations dist/
           cp target/aarch64-unknown-linux-gnu/release/debug_motor_speed dist/
+          cp target/aarch64-unknown-linux-gnu/release/debug_policy_io dist/
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw debug_imu debug_imu_observations debug_motor_speed libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw debug_imu debug_imu_observations debug_motor_speed debug_policy_io libonnxruntime.so*
           cd ..
 
       - name: Create Release
@@ -88,6 +89,7 @@ jobs:
             - **debug_imu**: Detailed IMU debugging tool with Euler angles
             - **debug_imu_observations**: Shows exact policy observations (gyro + projected gravity)
             - **debug_motor_speed**: Motor speed unit verification tool (sine wave test)
+            - **debug_policy_io**: Logs policy inputs/outputs to CSV for debugging
             - **test_i2c_raw**: Raw I2C diagnostic tool
             - **libonnxruntime.so**: ONNX Runtime library (required for policy inference)
 
