@@ -1,5 +1,14 @@
 from rustypot import Xl330PyController
 import time
+import math
+
+def convert_speed(raw_count):
+    """Convert raw velocity count to rad/s.
+
+    Based on XL330 specs: 0.229 RPM per count.
+    Conversion: RPM * (2π / 60) = rad/s
+    """
+    return raw_count * 0.229 * (2.0 * math.pi / 60.0)
 
 c = Xl330PyController("/dev/ttyAMA0", baudrate=1000000, timeout=0.01)
 
@@ -51,7 +60,8 @@ while True:
     positions = c.sync_read_present_position(ids)
     speeds = c.sync_read_present_velocity(ids)
     for i, name in enumerate(joints.keys()):
-        print(name, positions[i], speeds[i])
+        speed_rad_s = convert_speed(speeds[i])
+        print(f"{name:20s} pos: {positions[i]:7.3f} rad  vel_raw: {speeds[i]:5.0f}  vel: {speed_rad_s:7.4f} rad/s")
     print("===")
         
       
