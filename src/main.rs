@@ -46,6 +46,10 @@ struct Args {
     /// Position D gain for motors
     #[arg(long, default_value_t = 0)]
     kd: u16,
+
+    /// Pitch offset in radians to apply to projected gravity (workaround for uncalibrated accelerometer)
+    #[arg(long, default_value_t = 0.0)]
+    pitch_offset: f64,
 }
 
 
@@ -56,6 +60,7 @@ struct Runtime {
     policy: Policy,
     control_freq: u32,
     pid_gains: (u16, u16, u16), // (kP, kI, kD)
+    pitch_offset: f64,
     last_action: [f32; NUM_MOTORS],
     command: [f64; 3],
 }
@@ -87,12 +92,17 @@ impl Runtime {
             Policy::new_dummy().context("Failed to create dummy policy")?
         };
 
+        if args.pitch_offset != 0.0 {
+            println!("⚠  Using pitch offset: {:.4} rad ({:.2}°)", args.pitch_offset, args.pitch_offset.to_degrees());
+        }
+
         Ok(Self {
             motor_controller,
             imu_controller,
             policy,
             control_freq: args.freq,
             pid_gains: (args.kp, args.ki, args.kd),
+            pitch_offset: args.pitch_offset,
             last_action: [0.0; NUM_MOTORS],
             command: [0.0; 3],
         })
@@ -119,8 +129,28 @@ impl Runtime {
     /// Run one control loop iteration
     fn control_step(&mut self) -> Result<()> {
         // Read IMU data
-        let imu_data = self.imu_controller.read()
+        let mut imu_data = self.imu_controller.read()
             .context("Failed to read IMU data")?;
+
+        // Apply pitch offset if specified (rotation around Y axis)
+        if self.pitch_offset != 0.0 {
+            let cos_pitch = self.pitch_offset.cos();
+            let sin_pitch = self.pitch_offset.sin();
+            let x = imu_data.accel[0];
+            let z = imu_data.accel[2];
+
+            // Rotate projected gravity around Y axis
+            imu_data.accel[0] = x * cos_pitch + z * sin_pitch;
+            imu_data.accel[2] = -x * sin_pitch + z * cos_pitch;
+
+            // Renormalize
+            let mag = (imu_data.accel[0].powi(2) + imu_data.accel[1].powi(2) + imu_data.accel[2].powi(2)).sqrt();
+            if mag > 0.01 {
+                imu_data.accel[0] /= mag;
+                imu_data.accel[1] /= mag;
+                imu_data.accel[2] /= mag;
+            }
+        }
 
         // Read motor state
         let motor_state = self.motor_controller.read_state()
