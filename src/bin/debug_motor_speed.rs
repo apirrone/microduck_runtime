@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rustypot::servo::dynamixel::xl330::Xl330Controller;
 use std::f64::consts::PI;
 use std::io::Write;
@@ -33,7 +33,7 @@ fn main() -> Result<()> {
     let serial_port = serialport::new(&port, baudrate)
         .timeout(Duration::from_millis(100))
         .open()
-        .context("Failed to open serial port")?;
+        .map_err(|e| anyhow::anyhow!("Failed to open serial port: {:?}", e))?;
 
     // Create controller
     let mut controller = Xl330Controller::new()
@@ -45,9 +45,10 @@ fn main() -> Result<()> {
 
     // Read initial position
     println!("Reading current left ankle position...");
-    let initial_position = controller
-        .read_present_position(LEFT_ANKLE_ID)
-        .context("Failed to read initial position")?;
+    let positions = controller
+        .sync_read_present_position(&[LEFT_ANKLE_ID])
+        .map_err(|e| anyhow::anyhow!("Failed to read initial position: {:?}", e))?;
+    let initial_position = positions[0];
     println!("✓ Current position: {:.3} rad", initial_position);
     println!();
 
@@ -55,7 +56,7 @@ fn main() -> Result<()> {
     println!("Enabling torque on left ankle (ID {})...", LEFT_ANKLE_ID);
     controller
         .write_torque_enable(LEFT_ANKLE_ID, true)
-        .context("Failed to enable torque")?;
+        .map_err(|e| anyhow::anyhow!("Failed to enable torque: {:?}", e))?;
     println!("✓ Torque enabled");
     println!();
 
@@ -63,13 +64,13 @@ fn main() -> Result<()> {
     println!("Setting PID gains...");
     controller
         .write_position_p_gain(LEFT_ANKLE_ID, 400)
-        .context("Failed to set P gain")?;
+        .map_err(|e| anyhow::anyhow!("Failed to set P gain: {:?}", e))?;
     controller
         .write_position_i_gain(LEFT_ANKLE_ID, 0)
-        .context("Failed to set I gain")?;
+        .map_err(|e| anyhow::anyhow!("Failed to set I gain: {:?}", e))?;
     controller
         .write_position_d_gain(LEFT_ANKLE_ID, 0)
-        .context("Failed to set D gain")?;
+        .map_err(|e| anyhow::anyhow!("Failed to set D gain: {:?}", e))?;
     println!("✓ PID gains set (P=400, I=0, D=0)");
     println!();
 
@@ -128,17 +129,19 @@ fn main() -> Result<()> {
 
         // Command goal position
         controller
-            .write_goal_position(LEFT_ANKLE_ID, goal_position)
-            .context("Failed to write goal position")?;
+            .sync_write_goal_position(&[LEFT_ANKLE_ID], &[goal_position])
+            .map_err(|e| anyhow::anyhow!("Failed to write goal position: {:?}", e))?;
 
         // Read actual position and velocity
         let actual_position = controller
-            .read_present_position(LEFT_ANKLE_ID)
+            .sync_read_present_position(&[LEFT_ANKLE_ID])
+            .map(|v| v[0])
             .unwrap_or(0.0);
 
         let raw_velocity = controller
-            .read_present_velocity(LEFT_ANKLE_ID)
-            .unwrap_or(0) as f64;
+            .sync_read_present_velocity(&[LEFT_ANKLE_ID])
+            .map(|v| v[0] as f64)
+            .unwrap_or(0.0);
 
         let actual_velocity = raw_velocity * RADS_PER_SEC_PER_COUNT;
 
@@ -166,15 +169,15 @@ fn main() -> Result<()> {
     // Return to initial position
     println!("Returning to initial position...");
     controller
-        .write_goal_position(LEFT_ANKLE_ID, initial_position)
-        .context("Failed to write return position")?;
+        .sync_write_goal_position(&[LEFT_ANKLE_ID], &[initial_position])
+        .map_err(|e| anyhow::anyhow!("Failed to write return position: {:?}", e))?;
     thread::sleep(Duration::from_millis(500));
 
     // Disable torque
     println!("Disabling torque...");
     controller
         .write_torque_enable(LEFT_ANKLE_ID, false)
-        .context("Failed to disable torque")?;
+        .map_err(|e| anyhow::anyhow!("Failed to disable torque: {:?}", e))?;
     println!("✓ Torque disabled");
     println!();
 
