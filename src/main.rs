@@ -48,7 +48,7 @@ struct Args {
     kd: u16,
 
     /// Pitch offset in radians to apply to projected gravity (workaround for uncalibrated accelerometer)
-    #[arg(long, default_value_t = 0.0)]
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     pitch_offset: f64,
 }
 
