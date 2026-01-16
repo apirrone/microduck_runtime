@@ -90,6 +90,14 @@ if [ ! -f "test_imu" ]; then
     echo -e "${YELLOW}Warning: test_imu binary not found in archive.${NC}"
 fi
 
+if [ ! -f "test_imu2" ]; then
+    echo -e "${YELLOW}Warning: test_imu2 binary not found in archive.${NC}"
+fi
+
+if [ ! -f "test_imu3" ]; then
+    echo -e "${YELLOW}Warning: test_imu3 binary not found in archive.${NC}"
+fi
+
 if [ ! -f "debug_imu" ]; then
     echo -e "${YELLOW}Warning: debug_imu binary not found in archive.${NC}"
 fi
@@ -101,6 +109,8 @@ fi
 # Make binaries executable
 chmod +x "$BINARY_NAME"
 [ -f "test_imu" ] && chmod +x "test_imu"
+[ -f "test_imu2" ] && chmod +x "test_imu2"
+[ -f "test_imu3" ] && chmod +x "test_imu3"
 [ -f "debug_imu" ] && chmod +x "debug_imu"
 [ -f "test_i2c_raw" ] && chmod +x "test_i2c_raw"
 
@@ -124,12 +134,16 @@ echo "Installing to $INSTALL_DIR..."
 if [ -w "$INSTALL_DIR" ]; then
     mv "$BINARY_NAME" "$INSTALL_DIR/"
     [ -f "test_imu" ] && mv "test_imu" "$INSTALL_DIR/"
+    [ -f "test_imu2" ] && mv "test_imu2" "$INSTALL_DIR/"
+    [ -f "test_imu3" ] && mv "test_imu3" "$INSTALL_DIR/"
     [ -f "debug_imu" ] && mv "debug_imu" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && mv "test_i2c_raw" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
     sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
     [ -f "test_imu" ] && sudo mv "test_imu" "$INSTALL_DIR/"
+    [ -f "test_imu2" ] && sudo mv "test_imu2" "$INSTALL_DIR/"
+    [ -f "test_imu3" ] && sudo mv "test_imu3" "$INSTALL_DIR/"
     [ -f "debug_imu" ] && sudo mv "debug_imu" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && sudo mv "test_i2c_raw" "$INSTALL_DIR/"
 fi
@@ -150,6 +164,12 @@ if command -v $BINARY_NAME &> /dev/null; then
     if command -v test_imu &> /dev/null; then
         echo "  - test_imu (IMU testing tool)"
     fi
+    if command -v test_imu2 &> /dev/null; then
+        echo "  - test_imu2 (simple axis remapping test)"
+    fi
+    if command -v test_imu3 &> /dev/null; then
+        echo "  - test_imu3 (hardware axis remapping test)"
+    fi
     if command -v debug_imu &> /dev/null; then
         echo "  - debug_imu (detailed IMU debugging tool)"
     fi
@@ -161,6 +181,8 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo "  $BINARY_NAME --help"
     echo "  $BINARY_NAME --dummy"
     echo "  test_imu                    # Test BNO055 IMU (basic)"
+    echo "  test_imu2                   # Simple axis remapping verification"
+    echo "  test_imu3                   # Hardware-based axis remapping (bno055 crate)"
     echo "  debug_imu                   # Debug IMU with Euler angles"
     echo "  test_i2c_raw                # Raw I2C diagnostic"
     echo ""
