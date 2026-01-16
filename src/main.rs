@@ -9,6 +9,8 @@ use imu::ImuController;
 use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION};
 use observation::Observation;
 use policy::Policy;
+use std::fs::File;
+use std::io::Write as IoWrite;
 use std::time::{Duration, Instant};
 
 /// Microduck Robot Runtime
@@ -50,6 +52,10 @@ struct Args {
     /// Pitch offset in radians to apply to projected gravity (workaround for uncalibrated accelerometer)
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     pitch_offset: f64,
+
+    /// Optional CSV log file to save observations and actions
+    #[arg(long)]
+    log_file: Option<String>,
 }
 
 
@@ -63,6 +69,9 @@ struct Runtime {
     pitch_offset: f64,
     last_action: [f32; NUM_MOTORS],
     command: [f64; 3],
+    log_file: Option<File>,
+    start_time: Option<Instant>,
+    step_counter: u64,
 }
 
 impl Runtime {
@@ -96,6 +105,26 @@ impl Runtime {
             println!("⚠  Using pitch offset: {:.4} rad ({:.2}°)", args.pitch_offset, args.pitch_offset.to_degrees());
         }
 
+        // Initialize log file if requested
+        let mut log_file = None;
+        if let Some(ref path) = args.log_file {
+            let mut file = File::create(path)
+                .context(format!("Failed to create log file: {}", path))?;
+
+            // Write CSV header: step, time, obs_0..obs_50, action_0..action_13
+            write!(file, "step,time")?;
+            for i in 0..51 {
+                write!(file, ",obs_{}", i)?;
+            }
+            for i in 0..14 {
+                write!(file, ",action_{}", i)?;
+            }
+            writeln!(file)?;
+
+            log_file = Some(file);
+            println!("✓ CSV logging enabled: {}", path);
+        }
+
         Ok(Self {
             motor_controller,
             imu_controller,
@@ -105,6 +134,9 @@ impl Runtime {
             pitch_offset: args.pitch_offset,
             last_action: [0.0; NUM_MOTORS],
             command: [0.0; 3],
+            log_file,
+            start_time: None,
+            step_counter: 0,
         })
     }
 
@@ -174,6 +206,31 @@ impl Runtime {
             motor_targets[i] = DEFAULT_POSITION[i] + action[i] as f64;
         }
 
+        // Log data if CSV logging is enabled
+        if let Some(ref mut file) = self.log_file {
+            if let Some(start) = self.start_time {
+                let t = start.elapsed().as_secs_f64();
+
+                // Write step and time
+                write!(file, "{},{:.4}", self.step_counter, t)?;
+
+                // Write all 51 observations
+                let obs_slice = observation.as_slice();
+                for i in 0..51 {
+                    write!(file, ",{:.6}", obs_slice[i])?;
+                }
+
+                // Write all 14 actions
+                for i in 0..NUM_MOTORS {
+                    write!(file, ",{:.6}", action[i])?;
+                }
+
+                writeln!(file)?;
+
+                self.step_counter += 1;
+            }
+        }
+
         self.motor_controller.write_goal_positions(&motor_targets)
             .context("Failed to write motor positions")?;
 
@@ -186,6 +243,9 @@ impl Runtime {
     /// Run the main control loop
     fn run(&mut self, shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
         println!("Starting control loop at {} Hz", self.control_freq);
+
+        // Set start time for CSV logging
+        self.start_time = Some(Instant::now());
 
         let dt = Duration::from_secs_f64(1.0 / self.control_freq as f64);
         let mut iteration: u64 = 0;
@@ -224,6 +284,11 @@ impl Runtime {
                     (avg_time.as_secs_f64() / dt.as_secs_f64()) * 100.0,
                     current_str
                 );
+
+                // Flush log file every second
+                if let Some(ref mut file) = self.log_file {
+                    file.flush().ok();
+                }
             }
 
             // Sleep to maintain desired frequency
@@ -244,6 +309,12 @@ impl Runtime {
     /// Shutdown the runtime safely
     fn shutdown(&mut self) -> Result<()> {
         println!("Shutting down runtime...");
+
+        // Flush and close log file if it exists
+        if let Some(ref mut file) = self.log_file {
+            file.flush()?;
+            println!("✓ Log file flushed and closed");
+        }
 
         // Note: We do NOT disable motor torque on shutdown
         // Motors will maintain their last commanded position
