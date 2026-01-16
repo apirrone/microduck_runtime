@@ -55,7 +55,7 @@ impl ImuController {
             .map_err(|e| anyhow::anyhow!("Failed to initialize BNO055: {:?}", e))?;
 
         // Configure hardware axis remapping
-        // This matches test_imu3: Robot = [Sensor_Y, -Sensor_X, Sensor_Z]
+        // This matches test_imu3: Robot = [-Sensor_Y, -Sensor_X, Sensor_Z]
         let remap = AxisRemap::builder()
             .swap_x_with(BNO055AxisConfig::AXIS_AS_Y)  // Swap X and Y axes
             .build()
@@ -64,8 +64,8 @@ impl ImuController {
         imu.set_axis_remap(remap)
             .map_err(|e| anyhow::anyhow!("Failed to set axis remap: {:?}", e))?;
 
-        // Flip Y axis sign (right→left)
-        imu.set_axis_sign(BNO055AxisSign::Y_NEGATIVE)
+        // Flip both X and Y axis signs
+        imu.set_axis_sign(BNO055AxisSign::X_NEGATIVE | BNO055AxisSign::Y_NEGATIVE)
             .map_err(|e| anyhow::anyhow!("Failed to set axis sign: {:?}", e))?;
 
         // Set to NDOF mode

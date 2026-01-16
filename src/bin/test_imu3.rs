@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     println!();
     println!("Target mapping:");
     println!("  Sensor X (right) → Robot Y (left, negated)");
-    println!("  Sensor Y (forward) → Robot X (forward)");
+    println!("  Sensor Y (forward) → Robot X (backward, negated)");
     println!("  Sensor Z (up) → Robot Z (up)");
     println!();
 
@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     println!("✓ BNO055 initialized");
 
     // Configure axis remapping
-    // We want: Robot = [Sensor_Y, -Sensor_X, Sensor_Z]
+    // We want: Robot = [-Sensor_Y, -Sensor_X, Sensor_Z]
     // Swap X with Y: this makes X read from Y AND Y read from X (bidirectional)
     // Z stays as Z (no swap needed)
     let remap = AxisRemap::builder()
@@ -37,10 +37,10 @@ fn main() -> Result<()> {
 
     imu.set_axis_remap(remap).map_err(|e| anyhow::anyhow!("{:?}", e))?;
 
-    // Flip Y axis sign (right→left)
-    imu.set_axis_sign(BNO055AxisSign::Y_NEGATIVE).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+    // Flip both X and Y axis signs
+    imu.set_axis_sign(BNO055AxisSign::X_NEGATIVE | BNO055AxisSign::Y_NEGATIVE).map_err(|e| anyhow::anyhow!("{:?}", e))?;
 
-    println!("✓ Axis remapping configured: X=Sensor_Y, Y=-Sensor_X, Z=Sensor_Z");
+    println!("✓ Axis remapping configured: X=-Sensor_Y, Y=-Sensor_X, Z=Sensor_Z");
     println!();
 
     // Set to NDOF mode

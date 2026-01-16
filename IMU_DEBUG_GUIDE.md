@@ -29,11 +29,11 @@ AxisRemap::builder()
     .swap_x_with(BNO055AxisConfig::AXIS_AS_Y)  // Swap X and Y
     .build()
 
-imu.set_axis_sign(BNO055AxisSign::Y_NEGATIVE)  // Flip Y sign
+imu.set_axis_sign(BNO055AxisSign::X_NEGATIVE | BNO055AxisSign::Y_NEGATIVE)  // Flip both signs
 ```
 
 This results in the robot frame (X=forward, Y=left, Z=up):
-- **Robot X** = Sensor Y (forward)
+- **Robot X** = -Sensor Y (forward, negated)
 - **Robot Y** = -Sensor X (left, negated from right)
 - **Robot Z** = Sensor Z (up)
 
