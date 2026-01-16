@@ -43,6 +43,10 @@ path = "src/bin/debug_motor_speed.rs"
 name = "debug_policy_io"
 path = "src/bin/debug_policy_io.rs"
 
+[[bin]]
+name = "calibrate_imu"
+path = "src/bin/calibrate_imu.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }

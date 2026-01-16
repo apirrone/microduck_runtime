@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use linux_embedded_hal::{Delay, I2cdev};
-use bno055::{Bno055, AxisRemap, BNO055AxisConfig, BNO055AxisSign};
+use bno055::{Bno055, AxisRemap, BNO055AxisConfig, BNO055AxisSign, BNO055Calibration};
+use std::fs;
+use std::path::PathBuf;
 
 /// IMU data containing gyroscope and normalized projected gravity
 #[derive(Debug, Clone, Copy)]
@@ -72,7 +74,23 @@ impl ImuController {
         imu.set_mode(bno055::BNO055OperationMode::NDOF, &mut delay)
             .map_err(|e| anyhow::anyhow!("Failed to set NDOF mode: {:?}", e))?;
 
-        Ok(Self { imu, delay })
+        let mut controller = Self { imu, delay };
+
+        // Automatically load calibration if it exists
+        match controller.load_calibration() {
+            Ok(true) => {
+                // Calibration loaded successfully
+            }
+            Ok(false) => {
+                // No calibration file found - sensor will auto-calibrate
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to load IMU calibration: {}", e);
+                eprintln!("Sensor will use auto-calibration.");
+            }
+        }
+
+        Ok(controller)
     }
 
     /// Get calibration status
@@ -81,6 +99,57 @@ impl ImuController {
         let calib = self.imu.get_calibration_status()
             .map_err(|e| anyhow::anyhow!("Failed to get calibration status: {:?}", e))?;
         Ok((calib.sys, calib.gyr, calib.acc, calib.mag))
+    }
+
+    /// Get path to calibration file
+    fn get_calibration_path() -> PathBuf {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        PathBuf::from(home).join(".config/microduck/imu_calibration.bin")
+    }
+
+    /// Load calibration from file and apply to IMU
+    /// Returns true if calibration was loaded, false if file doesn't exist
+    pub fn load_calibration(&mut self) -> Result<bool> {
+        let calib_path = Self::get_calibration_path();
+
+        if !calib_path.exists() {
+            return Ok(false);
+        }
+
+        // Read calibration data from file
+        let calib_bytes = fs::read(&calib_path)
+            .context(format!("Failed to read calibration file: {}", calib_path.display()))?;
+
+        // Convert bytes to BNO055Calibration
+        let calibration = BNO055Calibration::from_buf(&calib_bytes);
+
+        // Apply calibration to sensor
+        self.imu.set_calibration_profile(calibration, &mut self.delay)
+            .map_err(|e| anyhow::anyhow!("Failed to set calibration profile: {:?}", e))?;
+
+        Ok(true)
+    }
+
+    /// Save current calibration to file
+    pub fn save_calibration(&mut self) -> Result<()> {
+        let calib_path = Self::get_calibration_path();
+
+        // Create directory if it doesn't exist
+        if let Some(parent) = calib_path.parent() {
+            fs::create_dir_all(parent)
+                .context("Failed to create calibration directory")?;
+        }
+
+        // Read calibration profile from sensor
+        let calibration = self.imu.calibration_profile(&mut self.delay)
+            .map_err(|e| anyhow::anyhow!("Failed to read calibration profile: {:?}", e))?;
+
+        // Write to file
+        let calib_bytes = calibration.as_bytes();
+        fs::write(&calib_path, calib_bytes)
+            .context(format!("Failed to write calibration file: {}", calib_path.display()))?;
+
+        Ok(())
     }
 
     /// Read current IMU data

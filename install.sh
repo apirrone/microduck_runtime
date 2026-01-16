@@ -114,6 +114,10 @@ if [ ! -f "debug_policy_io" ]; then
     echo -e "${YELLOW}Warning: debug_policy_io binary not found in archive.${NC}"
 fi
 
+if [ ! -f "calibrate_imu" ]; then
+    echo -e "${YELLOW}Warning: calibrate_imu binary not found in archive.${NC}"
+fi
+
 if [ ! -f "test_i2c_raw" ]; then
     echo -e "${YELLOW}Warning: test_i2c_raw binary not found in archive.${NC}"
 fi
@@ -127,6 +131,7 @@ chmod +x "$BINARY_NAME"
 [ -f "debug_imu_observations" ] && chmod +x "debug_imu_observations"
 [ -f "debug_motor_speed" ] && chmod +x "debug_motor_speed"
 [ -f "debug_policy_io" ] && chmod +x "debug_policy_io"
+[ -f "calibrate_imu" ] && chmod +x "calibrate_imu"
 [ -f "test_i2c_raw" ] && chmod +x "test_i2c_raw"
 
 # Install ONNX Runtime library
@@ -155,6 +160,7 @@ if [ -w "$INSTALL_DIR" ]; then
     [ -f "debug_imu_observations" ] && mv "debug_imu_observations" "$INSTALL_DIR/"
     [ -f "debug_motor_speed" ] && mv "debug_motor_speed" "$INSTALL_DIR/"
     [ -f "debug_policy_io" ] && mv "debug_policy_io" "$INSTALL_DIR/"
+    [ -f "calibrate_imu" ] && mv "calibrate_imu" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && mv "test_i2c_raw" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
@@ -166,6 +172,7 @@ else
     [ -f "debug_imu_observations" ] && sudo mv "debug_imu_observations" "$INSTALL_DIR/"
     [ -f "debug_motor_speed" ] && sudo mv "debug_motor_speed" "$INSTALL_DIR/"
     [ -f "debug_policy_io" ] && sudo mv "debug_policy_io" "$INSTALL_DIR/"
+    [ -f "calibrate_imu" ] && sudo mv "calibrate_imu" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && sudo mv "test_i2c_raw" "$INSTALL_DIR/"
 fi
 
@@ -182,6 +189,9 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo ""
     echo "Installed binaries:"
     echo "  - $BINARY_NAME (main runtime)"
+    if command -v calibrate_imu &> /dev/null; then
+        echo "  - calibrate_imu (IMU calibration tool - run this first!)"
+    fi
     if command -v test_imu &> /dev/null; then
         echo "  - test_imu (IMU testing tool)"
     fi
@@ -208,6 +218,7 @@ if command -v $BINARY_NAME &> /dev/null; then
     fi
     echo ""
     echo "Usage:"
+    echo "  calibrate_imu               # IMPORTANT: Calibrate IMU first!"
     echo "  $BINARY_NAME --help"
     echo "  $BINARY_NAME --dummy"
     echo "  test_imu                    # Test BNO055 IMU (basic)"
