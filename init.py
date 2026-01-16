@@ -49,8 +49,9 @@ while True:
     
     
     positions = c.sync_read_present_position(ids)
+    speeds = c.sync_read_present_velocities(ids)
     for i, name in enumerate(joints.keys()):
-        print(name, positions[i])
+        print(name, positions[i], speeds[i])
     print("===")
         
       
