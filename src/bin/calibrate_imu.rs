@@ -36,9 +36,9 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to initialize BNO055: {:?}", e))?;
 
     // Configure axis remapping to match robot coordinate system
-    // Robot frame: X=forward, Y=left, Z=up
-    // BNO055 mounted: X sensor points backward, Y points right, Z points up
-    // Therefore: Robot = [-Sensor_Y, -Sensor_X, Sensor_Z]
+    // IMU mounting: X+ right, Y+ forward, Z+ up
+    // Robot frame: X+ forward, Y+ left, Z+ up
+    // Mapping: Robot = [+Sensor_Y, -Sensor_X, +Sensor_Z]
     println!("Configuring axis remapping...");
     let remap = AxisRemap::builder()
         .swap_x_with(BNO055AxisConfig::AXIS_AS_Y)
@@ -47,7 +47,7 @@ fn main() -> Result<()> {
 
     imu.set_axis_remap(remap)
         .map_err(|e| anyhow::anyhow!("Failed to set axis remap: {:?}", e))?;
-    imu.set_axis_sign(BNO055AxisSign::X_NEGATIVE | BNO055AxisSign::Y_NEGATIVE)
+    imu.set_axis_sign(BNO055AxisSign::Y_NEGATIVE)
         .map_err(|e| anyhow::anyhow!("Failed to set axis sign: {:?}", e))?;
 
     println!("✓ Axis remapping configured");
