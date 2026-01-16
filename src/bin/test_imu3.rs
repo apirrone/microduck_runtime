@@ -78,15 +78,17 @@ fn main() -> Result<()> {
         let gyro = imu.gyro_data().map_err(|e| anyhow::anyhow!("{:?}", e))?;
 
         // Convert to proper units
-        // Accelerometer: mg to m/s² (1g = 9.81 m/s²)
-        let acc_x = accel.x as f64 / 1000.0 * 9.81;
-        let acc_y = accel.y as f64 / 1000.0 * 9.81;
-        let acc_z = accel.z as f64 / 1000.0 * 9.81;
+        // Accelerometer: crate returns in m/s² (already in correct units)
+        let acc_x = accel.x as f64;
+        let acc_y = accel.y as f64;
+        let acc_z = accel.z as f64;
 
-        // Gyroscope: already in rad/s
-        let gyro_x = gyro.x as f64;
-        let gyro_y = gyro.y as f64;
-        let gyro_z = gyro.z as f64;
+        // Gyroscope: crate returns in 1/16 deg/s, convert to rad/s
+        // Formula: (value / 16) * (π / 180) = value * π / (16 * 180)
+        let gyro_scale = std::f64::consts::PI / (16.0 * 180.0);
+        let gyro_x = gyro.x as f64 * gyro_scale;
+        let gyro_y = gyro.y as f64 * gyro_scale;
+        let gyro_z = gyro.z as f64 * gyro_scale;
 
         println!("{:10.3} {:10.3} {:10.3} {:10.3} {:10.3} {:10.3}",
                  acc_x, acc_y, acc_z, gyro_x, gyro_y, gyro_z);
