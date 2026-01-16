@@ -223,6 +223,24 @@ fn main() -> Result<()> {
             euler[2] * 180.0 / std::f64::consts::PI,
         ];
 
+        // Transform quaternion to robot frame
+        // Rotation of -90° around Z axis: [sensor_Y, -sensor_X, sensor_Z]
+        let q_mount = [
+            std::f64::consts::FRAC_1_SQRT_2,  // cos(-90°/2) = √2/2
+            0.0,
+            0.0,
+            -std::f64::consts::FRAC_1_SQRT_2, // sin(-90°/2) = -√2/2
+        ];
+        let quat_robot = quat_multiply(quat, q_mount);
+
+        // Convert transformed quaternion to Euler angles (in robot frame)
+        let euler_robot = quat_to_euler(quat_robot);
+        let euler_robot_deg = [
+            euler_robot[0] * 180.0 / std::f64::consts::PI,
+            euler_robot[1] * 180.0 / std::f64::consts::PI,
+            euler_robot[2] * 180.0 / std::f64::consts::PI,
+        ];
+
         // Check quaternion magnitude
         let quat_mag = (quat[0].powi(2) + quat[1].powi(2) + quat[2].powi(2) + quat[3].powi(2)).sqrt();
 
@@ -249,6 +267,8 @@ fn main() -> Result<()> {
                  imu_data.gyro[0], imu_data.gyro[1], imu_data.gyro[2]);
         println!("│ ProjGrav (norm):    X={:7.3}  Y={:7.3}  Z={:7.3}      │",
                  imu_data.accel[0], imu_data.accel[1], imu_data.accel[2]);
+        println!("│ Euler_robot (deg):  Roll={:7.2}° Pitch={:7.2}° Yaw={:7.2}° │",
+                 euler_robot_deg[0], euler_robot_deg[1], euler_robot_deg[2]);
 
         println!("└─────────────────────────────────────────────────────────────┘");
         println!();
