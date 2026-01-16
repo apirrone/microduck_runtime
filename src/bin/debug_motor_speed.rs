@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use rustypot::servo::dynamixel::xl330::Xl330Controller;
 use std::f64::consts::PI;
 use std::io::Write;
@@ -9,7 +10,22 @@ use serialport;
 const LEFT_ANKLE_ID: u8 = 24;
 const RADS_PER_SEC_PER_COUNT: f64 = 0.229 * (2.0 * PI / 60.0);
 
+/// Motor Speed Unit Verification Tool
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Serial port for motor communication
+    #[arg(short, long, default_value = "/dev/ttyUSB0")]
+    port: String,
+
+    /// Motor communication baudrate
+    #[arg(short, long, default_value_t = 1_000_000)]
+    baudrate: u32,
+}
+
 fn main() -> Result<()> {
+    let args = Args::parse();
+
     println!("╔════════════════════════════════════════════════════════════════╗");
     println!("║         Motor Speed Unit Verification Tool                    ║");
     println!("╚════════════════════════════════════════════════════════════════╝");
@@ -23,14 +39,10 @@ fn main() -> Result<()> {
     println!("    The left ankle will oscillate ±0.3 rad at 1 Hz");
     println!();
 
-    // Get serial port from args or use default
-    let port = std::env::args().nth(1).unwrap_or("/dev/ttyUSB0".to_string());
-    let baudrate = 1_000_000;
-
-    println!("Connecting to motors on {} at {} baud...", port, baudrate);
+    println!("Connecting to motors on {} at {} baud...", args.port, args.baudrate);
 
     // Open serial port
-    let serial_port = serialport::new(&port, baudrate)
+    let serial_port = serialport::new(&args.port, args.baudrate)
         .timeout(Duration::from_millis(100))
         .open()
         .map_err(|e| anyhow::anyhow!("Failed to open serial port: {:?}", e))?;
@@ -228,8 +240,9 @@ fn main() -> Result<()> {
     println!("  - Measurement timing");
     println!();
     println!("Usage:");
-    println!("  debug_motor_speed [PORT]");
-    println!("  debug_motor_speed /dev/ttyUSB0");
+    println!("  debug_motor_speed                        # Use default port /dev/ttyUSB0");
+    println!("  debug_motor_speed --port /dev/ttyAMA0    # Specify serial port");
+    println!("  debug_motor_speed --help                 # Show all options");
 
     Ok(())
 }

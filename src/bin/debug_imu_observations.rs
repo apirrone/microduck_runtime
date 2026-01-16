@@ -24,18 +24,20 @@ fn main() -> Result<()> {
 
     // Wait for calibration
     println!("Waiting for calibration...");
+    let mut final_calib = (0, 0, 0, 0);
     for i in 0..20 {
         let (sys, gyro, accel, mag) = imu.get_calibration_status()?;
+        final_calib = (sys, gyro, accel, mag);
         print!("\rCalibration: Sys={} Gyro={} Accel={} Mag={}", sys, gyro, accel, mag);
         std::io::stdout().flush()?;
 
         if sys >= 2 && gyro >= 2 && accel >= 2 {
-            println!("\n✓ Calibration sufficient");
+            println!("\n✓ Calibration sufficient (Sys={} Gyro={} Accel={} Mag={})", sys, gyro, accel, mag);
             break;
         }
 
         if i == 19 {
-            println!("\n⚠ Warning: Calibration incomplete, but continuing...");
+            println!("\n⚠ Warning: Calibration incomplete (Sys={} Gyro={} Accel={} Mag={}), but continuing...", sys, gyro, accel, mag);
         }
 
         thread::sleep(Duration::from_millis(500));
