@@ -79,12 +79,13 @@ impl Policy {
                 Ok(actions)
             }
             PolicyMode::Onnx(session) => {
-                // Create input tensor from observation (shape: [1, 51])
+                // Create input tensor from observation (shape: [1, obs_size])
                 let obs_vec = observation.as_slice().to_vec();
+                let obs_size = obs_vec.len();
 
                 // Create Value from tuple (shape, data)
-                // Shape is [1, 51] - batch size 1, observation dimension 51
-                let input_value = Value::from_array(([1, 51], obs_vec))
+                // Shape is [1, obs_size] - batch size 1, observation dimension (51 or 53)
+                let input_value = Value::from_array(([1, obs_size], obs_vec))
                     .map_err(|e| anyhow::anyhow!("Failed to create input value: {}", e))?;
 
                 // Run inference
