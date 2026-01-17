@@ -114,8 +114,8 @@ fn main() -> Result<()> {
 
         let motor_state = motor_controller.read_state()?;
 
-        // Build observation
-        let observation = Observation::new(&imu_data, &command, &motor_state, &last_action);
+        // Build observation (no phase for debug_policy_io)
+        let observation = Observation::new(&imu_data, &command, &motor_state, &last_action, None);
 
         // Run policy
         let action = policy.infer(&observation)?;

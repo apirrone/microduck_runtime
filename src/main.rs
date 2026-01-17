@@ -56,6 +56,14 @@ struct Args {
     /// Optional CSV log file to save observations and actions
     #[arg(long)]
     log_file: Option<String>,
+
+    /// Enable imitation mode (adds phase observation)
+    #[arg(long)]
+    imitation: bool,
+
+    /// Gait period in seconds (only used if --imitation is set)
+    #[arg(long, default_value_t = 0.72)]
+    gait_period: f64,
 }
 
 
@@ -72,6 +80,9 @@ struct Runtime {
     log_file: Option<File>,
     start_time: Option<Instant>,
     step_counter: u64,
+    use_imitation: bool,
+    gait_period: f64,
+    imitation_phase: f64,
 }
 
 impl Runtime {
@@ -105,15 +116,21 @@ impl Runtime {
             println!("⚠  Using pitch offset: {:.4} rad ({:.2}°)", args.pitch_offset, args.pitch_offset.to_degrees());
         }
 
+        // Imitation mode configuration
+        if args.imitation {
+            println!("✓ Imitation mode enabled (gait period: {:.3}s)", args.gait_period);
+        }
+
         // Initialize log file if requested
         let mut log_file = None;
         if let Some(ref path) = args.log_file {
             let mut file = File::create(path)
                 .context(format!("Failed to create log file: {}", path))?;
 
-            // Write CSV header: step, time, obs_0..obs_50, action_0..action_13
+            // Write CSV header: step, time, obs_0..obs_N, action_0..action_13
+            let obs_size = if args.imitation { 53 } else { 51 };
             write!(file, "step,time")?;
-            for i in 0..51 {
+            for i in 0..obs_size {
                 write!(file, ",obs_{}", i)?;
             }
             for i in 0..14 {
@@ -137,6 +154,9 @@ impl Runtime {
             log_file,
             start_time: None,
             step_counter: 0,
+            use_imitation: args.imitation,
+            gait_period: args.gait_period,
+            imitation_phase: 0.0,
         })
     }
 
@@ -188,12 +208,19 @@ impl Runtime {
         let motor_state = self.motor_controller.read_state()
             .context("Failed to read motor state")?;
 
-        // Build observation
+        // Build observation with optional phase
+        let phase = if self.use_imitation {
+            Some(self.imitation_phase)
+        } else {
+            None
+        };
+
         let observation = Observation::new(
             &imu_data,
             &self.command,
             &motor_state,
             &self.last_action,
+            phase,
         );
 
         // Run policy inference
@@ -214,10 +241,10 @@ impl Runtime {
                 // Write step and time
                 write!(file, "{},{:.4}", self.step_counter, t)?;
 
-                // Write all 51 observations
+                // Write all observations (size varies: 51 or 53)
                 let obs_slice = observation.as_slice();
-                for i in 0..51 {
-                    write!(file, ",{:.6}", obs_slice[i])?;
+                for val in obs_slice {
+                    write!(file, ",{:.6}", val)?;
                 }
 
                 // Write all 14 actions
@@ -236,6 +263,13 @@ impl Runtime {
 
         // Update last action
         self.last_action = action;
+
+        // Update phase for next step
+        if self.use_imitation {
+            let dt = 1.0 / self.control_freq as f64;
+            self.imitation_phase += dt / self.gait_period;
+            self.imitation_phase = self.imitation_phase % 1.0;  // Keep in [0, 1]
+        }
 
         Ok(())
     }
