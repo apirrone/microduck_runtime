@@ -54,6 +54,9 @@ ids = [v for v in joints.values()]
 c.sync_write_torque_enable(ids, [True for _ in joints.keys()])
 c.sync_write_goal_position(ids, init_pose)
 
+
+time.sleep(1)
+exit()
 while True:
     
     
