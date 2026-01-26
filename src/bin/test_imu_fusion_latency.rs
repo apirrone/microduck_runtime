@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 const SAMPLE_RATE_HZ: u32 = 200; // Sample at 200 Hz
-const BASELINE_SAMPLES: usize = 20; // Samples to establish baseline
+const BASELINE_SAMPLES: usize = 50; // Samples to establish baseline (increased for stability)
 const POST_TRIGGER_MS: u64 = 500; // Continue reading for 500ms after trigger
 
 fn main() -> Result<()> {
@@ -23,15 +23,21 @@ fn main() -> Result<()> {
     let mut baseline_raw_accel = [0.0; 3];
     let mut baseline_raw_gyro = [0.0; 3];
     let mut baseline_projected_gravity = [0.0; 3];
+    let mut gravity_samples = Vec::new();
 
     for _ in 0..BASELINE_SAMPLES {
         let data = imu.read().context("Failed to read IMU")?;
+
+        // Calculate gravity magnitude for this sample
+        let gravity_mag = (data.accel[0].powi(2) + data.accel[1].powi(2) + data.accel[2].powi(2)).sqrt();
+        gravity_samples.push(gravity_mag);
+
         for i in 0..3 {
             baseline_raw_accel[i] += data.accel[i];
             baseline_raw_gyro[i] += data.gyro[i];
             baseline_projected_gravity[i] += data.accel[i]; // accel is already projected gravity
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     // Average the baseline
@@ -40,6 +46,13 @@ fn main() -> Result<()> {
         baseline_raw_gyro[i] /= BASELINE_SAMPLES as f64;
         baseline_projected_gravity[i] /= BASELINE_SAMPLES as f64;
     }
+
+    // Calculate baseline noise (standard deviation of gravity magnitude)
+    let mean_gravity: f64 = gravity_samples.iter().sum::<f64>() / BASELINE_SAMPLES as f64;
+    let variance: f64 = gravity_samples.iter()
+        .map(|&x| (x - mean_gravity).powi(2))
+        .sum::<f64>() / BASELINE_SAMPLES as f64;
+    let std_dev = variance.sqrt();
 
     println!("✓ Baseline established:");
     println!("  Raw Accel:          [{:.3}, {:.3}, {:.3}]",
@@ -53,11 +66,22 @@ fn main() -> Result<()> {
     let gravity_mag = (baseline_projected_gravity[0].powi(2) +
                        baseline_projected_gravity[1].powi(2) +
                        baseline_projected_gravity[2].powi(2)).sqrt();
-    println!("  Gravity magnitude:  {:.3} (should be ~1.0)\n", gravity_mag);
+    println!("  Gravity magnitude:  {:.3} (should be ~1.0)", gravity_mag);
+    println!("  Baseline noise:     {:.4}g (std dev)\n", std_dev);
 
     if (gravity_mag - 1.0).abs() > 0.2 {
         println!("⚠️  Warning: Gravity magnitude is not close to 1.0");
         println!("   This may indicate IMU calibration issues or incorrect axis mapping\n");
+    }
+
+    if std_dev > 0.05 {
+        println!("⚠️  Warning: High baseline noise ({:.4}g)", std_dev);
+        println!("   IMU readings are unstable. Consider recalibration or checking mounting.\n");
+    } else if std_dev > 0.02 {
+        println!("ℹ️  Moderate baseline noise ({:.4}g)", std_dev);
+        println!("   This is normal for BNO055 fusion output.\n");
+    } else {
+        println!("✓ Low baseline noise ({:.4}g) - sensor is stable\n", std_dev);
     }
 
     // Instructions
@@ -126,7 +150,7 @@ fn main() -> Result<()> {
 
     // Define thresholds for movement detection
     const GYRO_THRESHOLD: f64 = 0.05;     // 0.05 rad/s deviation (~3°/s)
-    const GRAVITY_THRESHOLD: f64 = 0.05;  // 0.05g change in projected gravity
+    const GRAVITY_THRESHOLD: f64 = 0.15;  // 0.15g change in projected gravity (higher due to fusion noise)
 
     // Find first significant change in gyro (raw sensor)
     let gyro_detection = samples.iter()
@@ -221,6 +245,9 @@ fn main() -> Result<()> {
     println!("   - Projected Gravity: Sensor fusion output (used by control loop)");
     println!("   - Fusion delay < 5ms: Excellent, fusion is fast");
     println!("   - Fusion delay > 10ms: May impact high-frequency control");
+    println!("\n   Note on thresholds:");
+    println!("   - Gyro threshold: {:.3} rad/s ({:.1}°/s)", GYRO_THRESHOLD, GYRO_THRESHOLD.to_degrees());
+    println!("   - Gravity threshold: {:.3}g (higher due to fusion noise)", GRAVITY_THRESHOLD);
     println!("\n   For 50Hz control (20ms period):");
     println!("   - Total IMU latency should be < 15ms for good performance");
     println!("   - Your control loop uses the FUSED output (projected gravity)");
