@@ -89,21 +89,37 @@ impl MotorController {
     }
 
     /// Read current state of all motors (position and velocity)
+    /// Uses a single optimized sync_read for both velocity and position
     pub fn read_state(&mut self) -> Result<MotorState> {
         let mut state = MotorState::default();
 
-        // Sync read present position (in radians)
-        let positions = self.controller
-            .sync_read_present_position(&MOTOR_IDS)
-            .map_err(|e| anyhow::anyhow!("Failed to read positions: {}", e))?;
-        state.positions.copy_from_slice(&positions);
+        // Optimized: Single sync read for both velocity (addr 128, 4 bytes) and position (addr 132, 4 bytes)
+        // This reads 8 consecutive bytes starting at address 128
+        const VELOCITY_ADDR: u8 = 128;
+        const READ_LENGTH: u8 = 8;  // 4 bytes velocity + 4 bytes position
 
-        // Sync read present velocity (raw values need conversion)
-        let raw_velocities = self.controller
-            .sync_read_present_velocity(&MOTOR_IDS)
-            .map_err(|e| anyhow::anyhow!("Failed to read velocities: {}", e))?;
-        for (i, &raw_vel) in raw_velocities.iter().enumerate() {
-            state.velocities[i] = convert_velocity(raw_vel as f64);
+        let raw_data = self.controller
+            .sync_read_raw_data(&MOTOR_IDS, VELOCITY_ADDR, READ_LENGTH)
+            .map_err(|e| anyhow::anyhow!("Failed to read motor state: {}", e))?;
+
+        // Parse the 8-byte response for each motor
+        for (i, motor_data) in raw_data.iter().enumerate() {
+            if motor_data.len() != 8 {
+                return Err(anyhow::anyhow!("Invalid data length for motor {}: expected 8 bytes, got {}",
+                    MOTOR_IDS[i], motor_data.len()));
+            }
+
+            // Extract velocity (first 4 bytes) as i32
+            let raw_velocity = i32::from_le_bytes([
+                motor_data[0], motor_data[1], motor_data[2], motor_data[3]
+            ]);
+            state.velocities[i] = convert_velocity(raw_velocity as f64);
+
+            // Extract position (last 4 bytes) as i32 and convert to radians
+            let raw_position = i32::from_le_bytes([
+                motor_data[4], motor_data[5], motor_data[6], motor_data[7]
+            ]);
+            state.positions[i] = (2.0 * PI * (raw_position as f64) / 4096.0) - PI;
         }
 
         Ok(state)
@@ -179,5 +195,28 @@ mod tests {
         // Test positive velocity
         let result = convert_velocity(100.0);
         assert!(result > 0.0);
+
+        // Verify conversion matches the formula: 0.229 RPM * (2π/60) = rad/s
+        // 100 counts = 100 * 0.229 = 22.9 RPM = 22.9 * 2π/60 ≈ 2.398 rad/s
+        let expected = 100.0 * 0.229 * (2.0 * PI / 60.0);
+        assert!((result - expected).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_position_conversion() {
+        // Test zero position (raw value 2048 = center = 0 radians)
+        let raw_center = 2048_i32;
+        let position = (2.0 * PI * (raw_center as f64) / 4096.0) - PI;
+        assert!((position - 0.0).abs() < 0.001);
+
+        // Test min position (raw value 0 = -PI radians)
+        let raw_min = 0_i32;
+        let position_min = (2.0 * PI * (raw_min as f64) / 4096.0) - PI;
+        assert!((position_min - (-PI)).abs() < 0.001);
+
+        // Test max position (raw value 4095 ≈ PI radians)
+        let raw_max = 4095_i32;
+        let position_max = (2.0 * PI * (raw_max as f64) / 4096.0) - PI;
+        assert!((position_max - PI).abs() < 0.002);
     }
 }
