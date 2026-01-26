@@ -3,6 +3,10 @@ use rustypot::servo::dynamixel::xl330::Xl330Controller;
 use std::f64::consts::PI;
 use std::time::Duration;
 
+/// Feature flag: use bulk read (faster but may be less reliable)
+/// Set to false to use separate position/velocity reads (slower but more reliable)
+const USE_BULK_READ: bool = true;
+
 /// Number of motors on the microduck robot
 pub const NUM_MOTORS: usize = 14;
 
@@ -76,8 +80,9 @@ impl MotorController {
     pub fn new(port: &str, baudrate: u32) -> Result<Self> {
         // Open serial port with increased timeout for bulk reads
         // Reading 8 bytes from 14 motors requires waiting for 14 status packets
+        // Increased to 500ms to rule out timeout issues
         let serial_port = serialport::new(port, baudrate)
-            .timeout(Duration::from_millis(200))
+            .timeout(Duration::from_millis(500))
             .open()
             .context("Failed to open serial port")?;
 
@@ -90,8 +95,18 @@ impl MotorController {
     }
 
     /// Read current state of all motors (position and velocity)
-    /// Uses a single optimized sync_read for both velocity and position
+    /// Automatically selects bulk read or separate reads based on USE_BULK_READ flag
     pub fn read_state(&mut self) -> Result<MotorState> {
+        if USE_BULK_READ {
+            self.read_state_bulk()
+        } else {
+            self.read_state_separate()
+        }
+    }
+
+    /// Read current state using single bulk sync_read (faster)
+    /// Uses a single optimized sync_read for both velocity and position
+    fn read_state_bulk(&mut self) -> Result<MotorState> {
         let mut state = MotorState::default();
 
         // Optimized: Single sync read for both velocity (addr 128, 4 bytes) and position (addr 132, 4 bytes)
@@ -133,10 +148,9 @@ impl MotorController {
         Ok(state)
     }
 
-    /// Read current state of all motors (position and velocity) - FALLBACK METHOD
-    /// Uses two separate sync_read operations (slower but more reliable)
-    #[allow(dead_code)]
-    pub fn read_state_separate(&mut self) -> Result<MotorState> {
+    /// Read current state using separate sync_reads (slower but more reliable)
+    /// Uses two separate sync_read operations
+    fn read_state_separate(&mut self) -> Result<MotorState> {
         let mut state = MotorState::default();
 
         // Sync read present position (in radians)

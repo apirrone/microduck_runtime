@@ -47,6 +47,10 @@ path = "src/bin/debug_policy_io.rs"
 name = "calibrate_imu"
 path = "src/bin/calibrate_imu.rs"
 
+[[bin]]
+name = "test_imu_latency"
+path = "src/bin/test_imu_latency.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
