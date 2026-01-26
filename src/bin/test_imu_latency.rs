@@ -106,18 +106,18 @@ fn main() -> Result<()> {
     println!("Analyzing data...\n");
 
     // Define thresholds for movement detection
-    const ACCEL_THRESHOLD: f64 = 0.05; // 0.05g deviation
-    const GYRO_THRESHOLD: f64 = 0.2;   // 0.2 rad/s deviation
+    const ACCEL_THRESHOLD: f64 = 0.05; // 0.05g deviation (~0.5 m/s²)
+    const GYRO_THRESHOLD: f64 = 0.05;  // 0.05 rad/s deviation (~3°/s) - lowered for sensitivity
 
     // Find first significant change in acceleration
     let accel_detection = samples.iter()
-        .find(|(_, accel_dev, _)| *accel_dev > ACCEL_THRESHOLD)
-        .map(|(t, _, _)| *t);
+        .enumerate()
+        .find(|(_, (_, accel_dev, _))| *accel_dev > ACCEL_THRESHOLD);
 
     // Find first significant change in gyro
     let gyro_detection = samples.iter()
-        .find(|(_, _, gyro_dev)| *gyro_dev > GYRO_THRESHOLD)
-        .map(|(t, _, _)| *t);
+        .enumerate()
+        .find(|(_, (_, _, gyro_dev))| *gyro_dev > GYRO_THRESHOLD);
 
     // Print results
     println!("═══════════════════════════════════════════════════════");
@@ -125,9 +125,14 @@ fn main() -> Result<()> {
     println!("═══════════════════════════════════════════════════════");
 
     match accel_detection {
-        Some(t) => {
+        Some((idx, (t, accel_dev, gyro_dev))) => {
             println!("📊 Accelerometer detected movement:");
             println!("   Latency: {:.1} ms", t.as_secs_f64() * 1000.0);
+            println!("   Gyro at this time: {:.4} rad/s ({:.1}°/s)",
+                     gyro_dev, gyro_dev.to_degrees());
+            if *gyro_dev < GYRO_THRESHOLD {
+                println!("   ⚠️  Gyro below threshold - bump was mostly translational");
+            }
         }
         None => {
             println!("⚠️  Accelerometer: No movement detected above threshold");
@@ -138,13 +143,21 @@ fn main() -> Result<()> {
     println!();
 
     match gyro_detection {
-        Some(t) => {
+        Some((idx, (t, accel_dev, gyro_dev))) => {
             println!("📊 Gyroscope detected movement:");
             println!("   Latency: {:.1} ms", t.as_secs_f64() * 1000.0);
+            if accel_detection.is_some() {
+                let accel_idx = accel_detection.unwrap().0;
+                if idx > accel_idx {
+                    println!("   ⚠️  Gyro detected {:.1} ms AFTER accelerometer",
+                             (t.as_secs_f64() - accel_detection.unwrap().1.0.as_secs_f64()) * 1000.0);
+                }
+            }
         }
         None => {
             println!("⚠️  Gyroscope: No movement detected above threshold");
-            println!("   (threshold: {:.3} rad/s)", GYRO_THRESHOLD);
+            println!("   (threshold: {:.3} rad/s = {:.1}°/s)", GYRO_THRESHOLD, GYRO_THRESHOLD.to_degrees());
+            println!("   💡 Bump was likely pure translation (no rotation)");
         }
     }
 
@@ -175,8 +188,12 @@ fn main() -> Result<()> {
 
     println!("\n💡 Tips:");
     println!("   - Lower latency = better responsiveness");
-    println!("   - Typical BNO055 latency: 5-10ms");
+    println!("   - Typical BNO055 latency: 5-15ms for both sensors");
     println!("   - If latency > 20ms, check I2C speed and polling rate");
+    println!("\n   Gyro vs Accel latency difference:");
+    println!("   - If gyro >> accel: Bump was mostly translational (no rotation)");
+    println!("   - Try tapping/twisting the robot to test gyro response");
+    println!("   - For walking, both sensors matter equally");
 
     Ok(())
 }

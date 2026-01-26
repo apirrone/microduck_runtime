@@ -126,6 +126,10 @@ if [ ! -f "test_imu_latency" ]; then
     echo -e "${YELLOW}Warning: test_imu_latency binary not found in archive.${NC}"
 fi
 
+if [ ! -f "test_imu_fusion_latency" ]; then
+    echo -e "${YELLOW}Warning: test_imu_fusion_latency binary not found in archive.${NC}"
+fi
+
 # Make binaries executable
 chmod +x "$BINARY_NAME"
 [ -f "test_imu" ] && chmod +x "test_imu"
@@ -138,6 +142,7 @@ chmod +x "$BINARY_NAME"
 [ -f "calibrate_imu" ] && chmod +x "calibrate_imu"
 [ -f "test_i2c_raw" ] && chmod +x "test_i2c_raw"
 [ -f "test_imu_latency" ] && chmod +x "test_imu_latency"
+[ -f "test_imu_fusion_latency" ] && chmod +x "test_imu_fusion_latency"
 
 # Install ONNX Runtime library
 ONNX_LIB_DIR="/usr/local/lib"
@@ -168,6 +173,7 @@ if [ -w "$INSTALL_DIR" ]; then
     [ -f "calibrate_imu" ] && mv "calibrate_imu" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && mv "test_i2c_raw" "$INSTALL_DIR/"
     [ -f "test_imu_latency" ] && mv "test_imu_latency" "$INSTALL_DIR/"
+    [ -f "test_imu_fusion_latency" ] && mv "test_imu_fusion_latency" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
     sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
@@ -181,6 +187,7 @@ else
     [ -f "calibrate_imu" ] && sudo mv "calibrate_imu" "$INSTALL_DIR/"
     [ -f "test_i2c_raw" ] && sudo mv "test_i2c_raw" "$INSTALL_DIR/"
     [ -f "test_imu_latency" ] && sudo mv "test_imu_latency" "$INSTALL_DIR/"
+    [ -f "test_imu_fusion_latency" ] && sudo mv "test_imu_fusion_latency" "$INSTALL_DIR/"
 fi
 
 # Cleanup
@@ -226,6 +233,9 @@ if command -v $BINARY_NAME &> /dev/null; then
     if command -v test_imu_latency &> /dev/null; then
         echo "  - test_imu_latency (IMU latency measurement tool)"
     fi
+    if command -v test_imu_fusion_latency &> /dev/null; then
+        echo "  - test_imu_fusion_latency (IMU fusion latency test - projected gravity)"
+    fi
     echo ""
     echo "Usage:"
     echo "  calibrate_imu               # IMPORTANT: Calibrate IMU first!"
@@ -239,7 +249,8 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo "  debug_motor_speed           # Verify motor velocity units"
     echo "  debug_policy_io             # Log policy inputs/outputs to CSV"
     echo "  test_i2c_raw                # Raw I2C diagnostic"
-    echo "  test_imu_latency            # Measure IMU response latency"
+    echo "  test_imu_latency            # Measure IMU response latency (raw sensors)"
+    echo "  test_imu_fusion_latency     # Measure fusion latency (projected gravity)"
     echo ""
     echo "Example:"
     echo "  $BINARY_NAME --dummy --port /dev/ttyAMA0 --freq 50 --kp 400"
