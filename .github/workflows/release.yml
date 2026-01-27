@@ -67,10 +67,11 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/calibrate_imu dist/
           cp target/aarch64-unknown-linux-gnu/release/test_imu_latency dist/
           cp target/aarch64-unknown-linux-gnu/release/test_imu_fusion_latency dist/
+          cp target/aarch64-unknown-linux-gnu/release/test_motor_latency dist/
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw debug_imu debug_imu_observations debug_motor_speed debug_policy_io calibrate_imu test_imu_latency test_imu_fusion_latency libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw debug_imu debug_imu_observations debug_motor_speed debug_policy_io calibrate_imu test_imu_latency test_imu_fusion_latency test_motor_latency libonnxruntime.so*
           cd ..
 
       - name: Create Release
@@ -92,6 +93,7 @@ jobs:
             - **test_imu3**: Hardware-based IMU axis remapping using bno055 crate
             - **test_imu_latency**: IMU latency measurement tool (raw sensors)
             - **test_imu_fusion_latency**: IMU fusion latency test (projected gravity used in control loop)
+            - **test_motor_latency**: Motor command-to-movement latency test (measures actuation delay)
             - **debug_imu**: Detailed IMU debugging tool with Euler angles
             - **debug_imu_observations**: Shows exact policy observations (gyro + projected gravity)
             - **debug_motor_speed**: Motor speed unit verification tool (sine wave test)
@@ -126,6 +128,9 @@ jobs:
 
             # Measure fusion latency (what control loop uses)
             test_imu_fusion_latency
+
+            # Measure motor actuation latency
+            test_motor_latency
 
             # Debug IMU (detailed with Euler angles and orientation checking)
             debug_imu

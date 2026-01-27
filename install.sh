@@ -130,6 +130,10 @@ if [ ! -f "test_imu_fusion_latency" ]; then
     echo -e "${YELLOW}Warning: test_imu_fusion_latency binary not found in archive.${NC}"
 fi
 
+if [ ! -f "test_motor_latency" ]; then
+    echo -e "${YELLOW}Warning: test_motor_latency binary not found in archive.${NC}"
+fi
+
 # Make binaries executable
 chmod +x "$BINARY_NAME"
 [ -f "test_imu" ] && chmod +x "test_imu"
@@ -143,6 +147,7 @@ chmod +x "$BINARY_NAME"
 [ -f "test_i2c_raw" ] && chmod +x "test_i2c_raw"
 [ -f "test_imu_latency" ] && chmod +x "test_imu_latency"
 [ -f "test_imu_fusion_latency" ] && chmod +x "test_imu_fusion_latency"
+[ -f "test_motor_latency" ] && chmod +x "test_motor_latency"
 
 # Install ONNX Runtime library
 ONNX_LIB_DIR="/usr/local/lib"
@@ -174,6 +179,7 @@ if [ -w "$INSTALL_DIR" ]; then
     [ -f "test_i2c_raw" ] && mv "test_i2c_raw" "$INSTALL_DIR/"
     [ -f "test_imu_latency" ] && mv "test_imu_latency" "$INSTALL_DIR/"
     [ -f "test_imu_fusion_latency" ] && mv "test_imu_fusion_latency" "$INSTALL_DIR/"
+    [ -f "test_motor_latency" ] && mv "test_motor_latency" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
     sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
@@ -188,6 +194,7 @@ else
     [ -f "test_i2c_raw" ] && sudo mv "test_i2c_raw" "$INSTALL_DIR/"
     [ -f "test_imu_latency" ] && sudo mv "test_imu_latency" "$INSTALL_DIR/"
     [ -f "test_imu_fusion_latency" ] && sudo mv "test_imu_fusion_latency" "$INSTALL_DIR/"
+    [ -f "test_motor_latency" ] && sudo mv "test_motor_latency" "$INSTALL_DIR/"
 fi
 
 # Cleanup
@@ -236,6 +243,9 @@ if command -v $BINARY_NAME &> /dev/null; then
     if command -v test_imu_fusion_latency &> /dev/null; then
         echo "  - test_imu_fusion_latency (IMU fusion latency test - projected gravity)"
     fi
+    if command -v test_motor_latency &> /dev/null; then
+        echo "  - test_motor_latency (motor command-to-movement latency test)"
+    fi
     echo ""
     echo "Usage:"
     echo "  calibrate_imu               # IMPORTANT: Calibrate IMU first!"
@@ -251,6 +261,7 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo "  test_i2c_raw                # Raw I2C diagnostic"
     echo "  test_imu_latency            # Measure IMU response latency (raw sensors)"
     echo "  test_imu_fusion_latency     # Measure fusion latency (projected gravity)"
+    echo "  test_motor_latency          # Measure motor command-to-movement latency"
     echo ""
     echo "Example:"
     echo "  $BINARY_NAME --dummy --port /dev/ttyAMA0 --freq 50 --kp 400"

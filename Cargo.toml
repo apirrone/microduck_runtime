@@ -55,6 +55,10 @@ path = "src/bin/test_imu_latency.rs"
 name = "test_imu_fusion_latency"
 path = "src/bin/test_imu_fusion_latency.rs"
 
+[[bin]]
+name = "test_motor_latency"
+path = "src/bin/test_motor_latency.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
