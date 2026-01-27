@@ -333,11 +333,13 @@ impl Runtime {
                 };
 
                 println!(
-                    "⏱️  Runtime: {:.1}s | Iter: {} | Avg: {:.2}ms ({:.1}%) | Jitter: {:.2}ms | Freq: {:.1}Hz | {}",
+                    "⏱️  Runtime: {:.1}s | Iter: {} | Avg: {:.2}ms ({:.1}%) | Min: {:.2}ms | Max: {:.2}ms | Jitter: {:.2}ms | Freq: {:.1}Hz | {}",
                     total_elapsed,
                     iteration,
                     avg_time.as_secs_f64() * 1000.0,
                     (avg_time.as_secs_f64() / dt.as_secs_f64()) * 100.0,
+                    min_loop_time.as_secs_f64() * 1000.0,
+                    max_loop_time.as_secs_f64() * 1000.0,
                     jitter * 1000.0,
                     actual_freq,
                     current_str
