@@ -280,10 +280,14 @@ impl Runtime {
 
         // Set start time for CSV logging
         self.start_time = Some(Instant::now());
+        let runtime_start = Instant::now();
 
         let dt = Duration::from_secs_f64(1.0 / self.control_freq as f64);
         let mut iteration: u64 = 0;
         let mut total_time = Duration::ZERO;
+        let mut min_loop_time = Duration::from_secs(999999);
+        let mut max_loop_time = Duration::ZERO;
+        let mut last_report_iteration: u64 = 0;
 
         while !shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
             let loop_start = Instant::now();
@@ -299,9 +303,26 @@ impl Runtime {
             total_time += elapsed;
             iteration += 1;
 
+            // Track min/max for jitter calculation
+            if elapsed < min_loop_time {
+                min_loop_time = elapsed;
+            }
+            if elapsed > max_loop_time {
+                max_loop_time = elapsed;
+            }
+
             // Print statistics every second
             if iteration % self.control_freq as u64 == 0 {
                 let avg_time = total_time / iteration as u32;
+                let jitter = max_loop_time.as_secs_f64() - min_loop_time.as_secs_f64();
+                let total_elapsed = runtime_start.elapsed().as_secs_f64();
+
+                // Calculate actual frequency achieved
+                let actual_freq = if total_elapsed > 0.0 {
+                    iteration as f64 / total_elapsed
+                } else {
+                    0.0
+                };
 
                 // Read leg currents
                 let currents_result = self.motor_controller.read_leg_currents();
@@ -312,12 +333,20 @@ impl Runtime {
                 };
 
                 println!(
-                    "Running: {} iterations, avg loop time: {:.2} ms ({:.1}% of target) | Leg currents: {}",
+                    "⏱️  Runtime: {:.1}s | Iter: {} | Avg: {:.2}ms ({:.1}%) | Jitter: {:.2}ms | Freq: {:.1}Hz | {}",
+                    total_elapsed,
                     iteration,
                     avg_time.as_secs_f64() * 1000.0,
                     (avg_time.as_secs_f64() / dt.as_secs_f64()) * 100.0,
+                    jitter * 1000.0,
+                    actual_freq,
                     current_str
                 );
+
+                // Reset jitter tracking for next interval
+                min_loop_time = Duration::from_secs(999999);
+                max_loop_time = Duration::ZERO;
+                last_report_iteration = iteration;
 
                 // Flush log file every second
                 if let Some(ref mut file) = self.log_file {

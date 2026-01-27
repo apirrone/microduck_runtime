@@ -111,9 +111,12 @@ fn main() -> Result<()> {
 
         let period = 1.0 / frequency;
         let num_cycles = 3; // Test 3 complete cycles
-        let test_duration = Duration::from_secs_f64(num_cycles as f64 * period);
 
         let mut cycle_latencies = Vec::new();
+        let mut cycle_loop_times = Vec::new();
+        let mut cycle_sample_counts = Vec::new();
+
+        let test_start = Instant::now();
 
         for cycle in 0..num_cycles {
             println!("  Cycle {}/{}...", cycle + 1, num_cycles);
@@ -140,11 +143,13 @@ fn main() -> Result<()> {
             let mut movement_detected = false;
             let mut latency = Duration::ZERO;
             let mut samples = Vec::new();
+            let mut loop_times = Vec::new();
 
             // Sample for up to half the period (should detect movement much sooner)
             let max_sample_time = Duration::from_secs_f64(period / 2.0);
 
             while command_time.elapsed() < max_sample_time {
+                let loop_start = Instant::now();
                 let now = Instant::now();
 
                 if now.duration_since(last_sample) >= dt {
@@ -154,6 +159,10 @@ fn main() -> Result<()> {
                             let timestamp = command_time.elapsed();
                             let deviation = (pos - baseline_pos).abs();
                             samples.push((timestamp, pos, deviation));
+
+                            // Track loop time
+                            let loop_time = loop_start.elapsed();
+                            loop_times.push(loop_time);
 
                             // Detect movement
                             if !movement_detected && deviation > POSITION_THRESHOLD {
@@ -176,6 +185,15 @@ fn main() -> Result<()> {
                 let latency_ms = latency.as_secs_f64() * 1000.0;
                 println!("    ✓ Movement detected: {:.1} ms", latency_ms);
                 cycle_latencies.push(latency_ms);
+
+                // Calculate loop time statistics
+                if !loop_times.is_empty() {
+                    let avg_loop_time = loop_times.iter()
+                        .map(|d| d.as_secs_f64() * 1000.0)
+                        .sum::<f64>() / loop_times.len() as f64;
+                    cycle_loop_times.push(avg_loop_time);
+                    cycle_sample_counts.push(samples.len());
+                }
             } else {
                 println!("    ⚠️  No movement detected (motor may be stalled)");
             }
@@ -186,8 +204,11 @@ fn main() -> Result<()> {
             std::thread::sleep(Duration::from_millis((period * 500.0) as u64));
         }
 
+        let test_elapsed = test_start.elapsed();
+
         // Calculate statistics for this frequency
         if !cycle_latencies.is_empty() {
+            // Latency statistics
             let mean = cycle_latencies.iter().sum::<f64>() / cycle_latencies.len() as f64;
             let variance = cycle_latencies.iter()
                 .map(|&x| (x - mean).powi(2))
@@ -195,13 +216,29 @@ fn main() -> Result<()> {
             let std_dev = variance.sqrt();
             let min = cycle_latencies.iter().cloned().fold(f64::INFINITY, f64::min);
             let max = cycle_latencies.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let jitter = max - min;
+
+            // Loop time statistics
+            let avg_loop_time = if !cycle_loop_times.is_empty() {
+                cycle_loop_times.iter().sum::<f64>() / cycle_loop_times.len() as f64
+            } else {
+                0.0
+            };
+
+            // Total samples
+            let total_samples: usize = cycle_sample_counts.iter().sum();
+            let avg_samples = total_samples as f64 / cycle_sample_counts.len() as f64;
 
             println!("\n  Results for {:.1} Hz:", frequency);
-            println!("    Mean:   {:.1} ms", mean);
-            println!("    Std:    {:.1} ms", std_dev);
-            println!("    Range:  {:.1} - {:.1} ms", min, max);
+            println!("    Latency mean:   {:.1} ms", mean);
+            println!("    Latency std:    {:.1} ms", std_dev);
+            println!("    Latency jitter: {:.1} ms (range: {:.1} - {:.1} ms)", jitter, min, max);
+            println!("    Avg loop time:  {:.2} ms ({:.0} Hz effective)",
+                     avg_loop_time, 1000.0 / avg_loop_time);
+            println!("    Samples/cycle:  {:.0}", avg_samples);
+            println!("    Test elapsed:   {:.1} s", test_elapsed.as_secs_f64());
 
-            results.push((frequency, mean, std_dev, min, max));
+            results.push((frequency, mean, std_dev, jitter, avg_loop_time, test_elapsed.as_secs_f64()));
         } else {
             println!("\n  ⚠️  No valid measurements for {:.1} Hz", frequency);
         }
@@ -223,24 +260,31 @@ fn main() -> Result<()> {
     println!("\n═══════════════════════════════════════════════════════");
     println!("                    SUMMARY                            ");
     println!("═══════════════════════════════════════════════════════");
-    println!("\nFreq(Hz) | Mean(ms) | Std(ms) | Min(ms) | Max(ms)");
-    println!("---------|----------|---------|---------|----------");
+    println!("\nLatency Statistics:");
+    println!("Freq(Hz) | Mean(ms) | Std(ms) | Jitter(ms) | Loop(ms) | Elapsed(s)");
+    println!("---------|----------|---------|------------|----------|------------");
 
-    for (freq, mean, std, min, max) in &results {
-        println!("  {:5.1}  |  {:6.1}  |  {:5.1}  |  {:5.1}  |  {:6.1}",
-                 freq, mean, std, min, max);
+    for (freq, mean, std, jitter, avg_loop, elapsed) in &results {
+        println!("  {:5.1}  |  {:6.1}  |  {:5.1}  |   {:6.1}   |  {:6.2}  |   {:6.1}",
+                 freq, mean, std, jitter, avg_loop, elapsed);
     }
 
     println!("\n💡 Interpretation:");
-    println!("   - Mean latency: Time from command to first detectable movement");
-    println!("   - Lower is better (typical: 5-20ms)");
-    println!("   - Higher frequencies may show increased latency due to:");
-    println!("     * Motor acceleration limits");
-    println!("     * Communication overhead");
-    println!("     * PID controller response time");
+    println!("   Latency metrics:");
+    println!("   - Mean: Average time from command to movement (lower is better)");
+    println!("   - Std: Consistency of response (lower is better)");
+    println!("   - Jitter: Max - Min latency (lower is more predictable)");
+    println!("\n   Loop time metrics:");
+    println!("   - Loop: Average time per position read (includes serial comm)");
+    println!("   - Should be ~5ms for 200Hz sampling (1000ms / 200Hz)");
+    println!("   - Higher = serial port bottleneck or slow motor response");
     println!("\n   For 50Hz control (20ms period):");
     println!("   - Motor latency should be < 15ms for responsive control");
-    println!("   - Total loop latency = IMU read + inference + motor latency");
+    println!("   - Total loop latency = IMU read (~5ms) + inference + motor latency");
+    println!("   - If motor latency > 15ms, consider:");
+    println!("     * Increasing baudrate to 2M");
+    println!("     * Reducing PID gains (faster response but less stable)");
+    println!("     * Using predictive control to compensate for delay");
 
     Ok(())
 }
