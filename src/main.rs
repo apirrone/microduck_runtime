@@ -275,8 +275,8 @@ impl Runtime {
     }
 
     /// Run the main control loop
-    fn run(&mut self, shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
-        println!("Starting control loop at {} Hz", self.control_freq);
+    async fn run(&mut self, shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
+        println!("Starting control loop at {} Hz (using tokio interval)", self.control_freq);
 
         // Set start time for CSV logging
         self.start_time = Some(Instant::now());
@@ -288,8 +288,17 @@ impl Runtime {
         let mut min_loop_time = Duration::from_secs(999999);
         let mut max_loop_time = Duration::ZERO;
         let mut last_report_iteration: u64 = 0;
+        let mut missed_deadlines: u64 = 0;
+
+        // Create tokio interval with MissedTickBehavior::Burst
+        // Burst mode will catch up on missed ticks rather than skipping them
+        let mut interval = tokio::time::interval(dt);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
 
         while !shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
+            // Wait for next tick
+            interval.tick().await;
+
             let loop_start = Instant::now();
 
             // Run control step
@@ -356,15 +365,18 @@ impl Runtime {
                 }
             }
 
-            // Sleep to maintain desired frequency
-            if elapsed < dt {
-                std::thread::sleep(dt - elapsed);
-            } else {
-                eprintln!(
-                    "Warning: Control loop overrun! Target: {:.2} ms, Actual: {:.2} ms",
-                    dt.as_secs_f64() * 1000.0,
-                    elapsed.as_secs_f64() * 1000.0
-                );
+            // Check if we overran (tokio interval will handle timing automatically)
+            if elapsed > dt {
+                missed_deadlines += 1;
+                if missed_deadlines % 10 == 1 {  // Print every 10th miss
+                    eprintln!(
+                        "Warning: Missed deadline #{} - Target: {:.2} ms, Actual: {:.2} ms (overrun: {:.2} ms)",
+                        missed_deadlines,
+                        dt.as_secs_f64() * 1000.0,
+                        elapsed.as_secs_f64() * 1000.0,
+                        (elapsed.as_secs_f64() - dt.as_secs_f64()) * 1000.0
+                    );
+                }
             }
         }
 
@@ -390,7 +402,8 @@ impl Runtime {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
     println!("=== Microduck Robot Runtime ===\n");
 
     // Parse command line arguments
@@ -413,7 +426,7 @@ fn main() -> Result<()> {
     runtime.initialize_motors()?;
 
     // Run main loop (will exit when Ctrl+C is pressed)
-    runtime.run(shutdown_flag)?;
+    runtime.run(shutdown_flag).await?;
 
     // Clean shutdown
     runtime.shutdown()?;
