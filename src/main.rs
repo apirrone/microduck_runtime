@@ -64,6 +64,18 @@ struct Args {
     /// Gait period in seconds (only used if --imitation is set)
     #[arg(long, default_value_t = 0.72)]
     gait_period: f64,
+
+    /// Linear velocity command in X direction (m/s)
+    #[arg(short = 'x', long = "vel_x", default_value_t = 0.0, allow_hyphen_values = true)]
+    vel_x: f64,
+
+    /// Linear velocity command in Y direction (m/s)
+    #[arg(short = 'y', long = "vel_y", default_value_t = 0.0, allow_hyphen_values = true)]
+    vel_y: f64,
+
+    /// Angular velocity command around Z axis (rad/s)
+    #[arg(short = 'z', long = "vel_z", default_value_t = 0.0, allow_hyphen_values = true)]
+    vel_z: f64,
 }
 
 
@@ -121,6 +133,12 @@ impl Runtime {
             println!("✓ Imitation mode enabled (gait period: {:.3}s)", args.gait_period);
         }
 
+        // Velocity command configuration
+        if args.vel_x != 0.0 || args.vel_y != 0.0 || args.vel_z != 0.0 {
+            println!("✓ Velocity command: x={:.3} m/s, y={:.3} m/s, z={:.3} rad/s",
+                     args.vel_x, args.vel_y, args.vel_z);
+        }
+
         // Initialize log file if requested
         let mut log_file = None;
         if let Some(ref path) = args.log_file {
@@ -150,7 +168,7 @@ impl Runtime {
             pid_gains: (args.kp, args.ki, args.kd),
             pitch_offset: args.pitch_offset,
             last_action: [0.0; NUM_MOTORS],
-            command: [0.0; 3],
+            command: [args.vel_x, args.vel_y, args.vel_z],
             log_file,
             start_time: None,
             step_counter: 0,
