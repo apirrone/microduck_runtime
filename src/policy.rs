@@ -16,7 +16,9 @@ pub enum PolicyMode {
 /// Policy inference engine using ONNX Runtime
 pub struct Policy {
     mode: PolicyMode,
+    standing_mode: Option<PolicyMode>,
     start_time: Instant,
+    command_threshold: f64,
 }
 
 impl Policy {
@@ -24,7 +26,9 @@ impl Policy {
     pub fn new_dummy() -> Result<Self> {
         Ok(Self {
             mode: PolicyMode::Dummy,
+            standing_mode: None,
             start_time: Instant::now(),
+            command_threshold: 0.05,
         })
     }
 
@@ -40,19 +44,64 @@ impl Policy {
 
         Ok(Self {
             mode: PolicyMode::Onnx(session),
+            standing_mode: None,
             start_time: Instant::now(),
+            command_threshold: 0.05,
         })
+    }
+
+    /// Create a new policy with both walking and standing models
+    ///
+    /// # Arguments
+    /// * `walking_path` - Path to the walking policy ONNX model file
+    /// * `standing_path` - Path to the standing policy ONNX model file
+    pub fn new_dual_onnx(walking_path: &str, standing_path: &str) -> Result<Self> {
+        let walking_session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(2)?
+            .commit_from_file(walking_path)?;
+
+        let standing_session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(2)?
+            .commit_from_file(standing_path)?;
+
+        Ok(Self {
+            mode: PolicyMode::Onnx(walking_session),
+            standing_mode: Some(PolicyMode::Onnx(standing_session)),
+            start_time: Instant::now(),
+            command_threshold: 0.05,
+        })
+    }
+
+    /// Calculate command magnitude
+    fn command_magnitude(command: &[f64; 3]) -> f64 {
+        (command[0].powi(2) + command[1].powi(2) + command[2].powi(2)).sqrt()
     }
 
     /// Run inference on an observation to get actions
     ///
     /// # Arguments
     /// * `observation` - The observation vector (51 dimensions)
+    /// * `command` - The velocity command [vel_x, vel_y, vel_z]
     ///
     /// # Returns
     /// Action vector (14 dimensions) for motor position offsets
-    pub fn infer(&mut self, observation: &Observation) -> Result<[f32; NUM_MOTORS]> {
-        match &mut self.mode {
+    pub fn infer(&mut self, observation: &Observation, command: &[f64; 3]) -> Result<[f32; NUM_MOTORS]> {
+        // Determine which policy to use based on command magnitude
+        let use_standing = if self.standing_mode.is_some() {
+            Self::command_magnitude(command) <= self.command_threshold
+        } else {
+            false
+        };
+
+        let policy_mode = if use_standing {
+            self.standing_mode.as_mut().unwrap()
+        } else {
+            &mut self.mode
+        };
+
+        match policy_mode {
             PolicyMode::Dummy => {
                 // Dummy policy: generate squatting motion
                 // Frequency: 0.5 Hz, Amplitude: 0.2 rad (hip_pitch, ankle), 0.4 rad (knee)
@@ -134,7 +183,8 @@ mod tests {
     fn test_dummy_policy() {
         let mut policy = Policy::new_dummy().unwrap();
         let obs = Observation::default();
-        let action = policy.infer(&obs).unwrap();
+        let command = [0.0, 0.0, 0.0];
+        let action = policy.infer(&obs, &command).unwrap();
 
         assert_eq!(action.len(), NUM_MOTORS);
 
@@ -150,11 +200,12 @@ mod tests {
 
         let mut policy = Policy::new_dummy().unwrap();
         let obs = Observation::default();
+        let command = [0.0, 0.0, 0.0];
 
         // Wait a bit so we're not at t=0
         thread::sleep(Duration::from_millis(100));
 
-        let action = policy.infer(&obs).unwrap();
+        let action = policy.infer(&obs, &command).unwrap();
 
         // Check that leg joints have some motion (not all zeros)
         let has_motion = action[2] != 0.0 || action[3] != 0.0 || action[4] != 0.0 ||

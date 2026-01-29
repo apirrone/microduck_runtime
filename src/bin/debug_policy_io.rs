@@ -118,7 +118,7 @@ fn main() -> Result<()> {
         let observation = Observation::new(&imu_data, &command, &motor_state, &last_action, None);
 
         // Run policy
-        let action = policy.infer(&observation)?;
+        let action = policy.infer(&observation, &command)?;
 
         // Compute targets
         let mut targets = [0.0; NUM_MOTORS];

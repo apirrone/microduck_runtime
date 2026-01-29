@@ -37,6 +37,10 @@ struct Args {
     #[arg(short, long)]
     model: Option<String>,
 
+    /// Path to standing policy ONNX model file (optional)
+    #[arg(short, long)]
+    standing: Option<String>,
+
     /// Position P gain for motors
     #[arg(long, default_value_t = 400)]
     kp: u16,
@@ -116,9 +120,17 @@ impl Runtime {
         let policy = if args.dummy {
             println!("✓ Using dummy policy (always outputs zeros)");
             Policy::new_dummy().context("Failed to create dummy policy")?
-        } else if let Some(ref path) = args.model {
-            println!("✓ Loading ONNX model from: {}", path);
-            Policy::new_onnx(path).context("Failed to load ONNX model")?
+        } else if let Some(ref walking_path) = args.model {
+            if let Some(ref standing_path) = args.standing {
+                println!("✓ Loading walking ONNX model from: {}", walking_path);
+                println!("✓ Loading standing ONNX model from: {}", standing_path);
+                println!("✓ Policy switching enabled (threshold: 0.05 for cmd magnitude)");
+                Policy::new_dual_onnx(walking_path, standing_path)
+                    .context("Failed to load dual ONNX models")?
+            } else {
+                println!("✓ Loading ONNX model from: {}", walking_path);
+                Policy::new_onnx(walking_path).context("Failed to load ONNX model")?
+            }
         } else {
             println!("! No policy specified, using dummy policy");
             Policy::new_dummy().context("Failed to create dummy policy")?
@@ -242,7 +254,7 @@ impl Runtime {
         );
 
         // Run policy inference
-        let action = self.policy.infer(&observation)
+        let action = self.policy.infer(&observation, &self.command)
             .context("Failed to run policy inference")?;
 
         // Convert action offsets to motor targets: init_pos + action
