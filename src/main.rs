@@ -9,9 +9,17 @@ use imu::ImuController;
 use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION};
 use observation::Observation;
 use policy::Policy;
+use serde::Serialize;
 use std::fs::File;
 use std::io::Write as IoWrite;
 use std::time::{Duration, Instant};
+
+/// Timestamped observation for recording
+#[derive(Serialize, Debug, Clone)]
+struct TimestampedObservation {
+    timestamp: f64,  // Seconds since start
+    observation: Vec<f32>,
+}
 
 /// Microduck Robot Runtime
 #[derive(Parser, Debug)]
@@ -80,6 +88,10 @@ struct Args {
     /// Angular velocity command around Z axis (rad/s)
     #[arg(short = 'z', long = "vel_z", default_value_t = 0.0, allow_hyphen_values = true)]
     vel_z: f64,
+
+    /// Enable recording mode: save observations to pickle file on Ctrl+C
+    #[arg(short, long)]
+    record: Option<String>,
 }
 
 
@@ -99,6 +111,9 @@ struct Runtime {
     use_imitation: bool,
     gait_period: f64,
     imitation_phase: f64,
+    record_file: Option<String>,
+    recorded_observations: Vec<TimestampedObservation>,
+    policy_enabled: bool,  // Controls whether policy inference runs
 }
 
 impl Runtime {
@@ -151,6 +166,11 @@ impl Runtime {
                      args.vel_x, args.vel_y, args.vel_z);
         }
 
+        // Recording mode configuration
+        if let Some(ref path) = args.record {
+            println!("✓ Recording mode enabled: observations will be saved to {}", path);
+        }
+
         // Initialize log file if requested
         let mut log_file = None;
         if let Some(ref path) = args.log_file {
@@ -172,6 +192,9 @@ impl Runtime {
             println!("✓ CSV logging enabled: {}", path);
         }
 
+        // In recording mode, policy starts disabled and will be enabled after standby
+        let policy_enabled = args.record.is_none();
+
         Ok(Self {
             motor_controller,
             imu_controller,
@@ -187,6 +210,9 @@ impl Runtime {
             use_imitation: args.imitation,
             gait_period: args.gait_period,
             imitation_phase: 0.0,
+            record_file: args.record.clone(),
+            recorded_observations: Vec::new(),
+            policy_enabled,
         })
     }
 
@@ -253,9 +279,14 @@ impl Runtime {
             phase,
         );
 
-        // Run policy inference
-        let action = self.policy.infer(&observation, &self.command)
-            .context("Failed to run policy inference")?;
+        // Run policy inference (or hold default position if policy disabled)
+        let action = if self.policy_enabled {
+            self.policy.infer(&observation, &self.command)
+                .context("Failed to run policy inference")?
+        } else {
+            // During standby, use zero actions (hold default position)
+            [0.0f32; NUM_MOTORS]
+        };
 
         // Convert action offsets to motor targets: init_pos + action
         let mut motor_targets = [0.0f64; NUM_MOTORS];
@@ -263,29 +294,41 @@ impl Runtime {
             motor_targets[i] = DEFAULT_POSITION[i] + action[i] as f64;
         }
 
+        // Get timestamp for both logging and recording
+        let timestamp = if let Some(start) = self.start_time {
+            start.elapsed().as_secs_f64()
+        } else {
+            0.0
+        };
+
+        // Record observation if recording mode is enabled
+        if self.record_file.is_some() {
+            let obs_vec = observation.as_slice().to_vec();
+            self.recorded_observations.push(TimestampedObservation {
+                timestamp,
+                observation: obs_vec,
+            });
+        }
+
         // Log data if CSV logging is enabled
         if let Some(ref mut file) = self.log_file {
-            if let Some(start) = self.start_time {
-                let t = start.elapsed().as_secs_f64();
+            // Write step and time
+            write!(file, "{},{:.4}", self.step_counter, timestamp)?;
 
-                // Write step and time
-                write!(file, "{},{:.4}", self.step_counter, t)?;
-
-                // Write all observations (size varies: 51 or 53)
-                let obs_slice = observation.as_slice();
-                for val in obs_slice {
-                    write!(file, ",{:.6}", val)?;
-                }
-
-                // Write all 14 actions
-                for i in 0..NUM_MOTORS {
-                    write!(file, ",{:.6}", action[i])?;
-                }
-
-                writeln!(file)?;
-
-                self.step_counter += 1;
+            // Write all observations (size varies: 51 or 53)
+            let obs_slice = observation.as_slice();
+            for val in obs_slice {
+                write!(file, ",{:.6}", val)?;
             }
+
+            // Write all 14 actions
+            for i in 0..NUM_MOTORS {
+                write!(file, ",{:.6}", action[i])?;
+            }
+
+            writeln!(file)?;
+
+            self.step_counter += 1;
         }
 
         self.motor_controller.write_goal_positions(&motor_targets)
@@ -308,9 +351,16 @@ impl Runtime {
     async fn run(&mut self, shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
         println!("Starting control loop at {} Hz (using tokio interval)", self.control_freq);
 
-        // Set start time for CSV logging
+        // Set start time for CSV logging and recording
         self.start_time = Some(Instant::now());
         let runtime_start = Instant::now();
+
+        // If recording mode and policy is disabled, schedule it to enable after 1 second
+        let policy_enable_time = if !self.policy_enabled {
+            Some(Instant::now() + Duration::from_secs(1))
+        } else {
+            None
+        };
 
         let dt = Duration::from_secs_f64(1.0 / self.control_freq as f64);
         let mut iteration: u64 = 0;
@@ -330,6 +380,14 @@ impl Runtime {
             interval.tick().await;
 
             let loop_start = Instant::now();
+
+            // Enable policy after 1 second in recording mode
+            if let Some(enable_time) = policy_enable_time {
+                if loop_start >= enable_time && !self.policy_enabled {
+                    self.policy_enabled = true;
+                    println!("✓ Policy inference enabled (after 1s standby)");
+                }
+            }
 
             // Run control step
             if let Err(e) = self.control_step() {
@@ -417,6 +475,20 @@ impl Runtime {
     fn shutdown(&mut self) -> Result<()> {
         println!("Shutting down runtime...");
 
+        // Save recorded observations if recording mode is enabled
+        if let Some(ref path) = self.record_file {
+            println!("Saving {} recorded observations to {}...",
+                     self.recorded_observations.len(), path);
+
+            let mut file = File::create(path)
+                .context(format!("Failed to create recording file: {}", path))?;
+
+            serde_pickle::to_writer(&mut file, &self.recorded_observations, Default::default())
+                .context("Failed to serialize observations to pickle format")?;
+
+            println!("✓ Recorded observations saved to {}", path);
+        }
+
         // Flush and close log file if it exists
         if let Some(ref mut file) = self.log_file {
             file.flush()?;
@@ -454,6 +526,14 @@ async fn main() -> Result<()> {
 
     // Initialize motors
     runtime.initialize_motors()?;
+
+    // If recording mode is enabled, wait 1 second before starting the control loop
+    // This gives the robot time to settle, then we'll record 1 second of standby
+    if args.record.is_some() {
+        println!("Recording mode: waiting 1 second before starting control loop...");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        println!("✓ Starting control loop (1s standby recording, then policy inference)");
+    }
 
     // Run main loop (will exit when Ctrl+C is pressed)
     runtime.run(shutdown_flag).await?;

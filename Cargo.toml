@@ -71,3 +71,5 @@ ndarray = "0.15"
 bno055 = "0.4"
 linux-embedded-hal = "0.4"
 tokio = { version = "1", features = ["rt", "time", "macros"] }
+serde = { version = "1.0", features = ["derive"] }
+serde-pickle = "1.1"
