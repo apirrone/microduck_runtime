@@ -89,6 +89,10 @@ struct Args {
     #[arg(short = 'z', long = "vel_z", default_value_t = 0.0, allow_hyphen_values = true)]
     vel_z: f64,
 
+    /// Action scale multiplier (scales policy outputs before applying to motors)
+    #[arg(long, default_value_t = 1.0, allow_hyphen_values = true)]
+    action_scale: f64,
+
     /// Enable recording mode: save observations to pickle file on Ctrl+C
     #[arg(short, long)]
     record: Option<String>,
@@ -105,6 +109,7 @@ struct Runtime {
     pitch_offset: f64,
     last_action: [f32; NUM_MOTORS],
     command: [f64; 3],
+    action_scale: f64,
     log_file: Option<File>,
     start_time: Option<Instant>,
     step_counter: u64,
@@ -166,6 +171,11 @@ impl Runtime {
                      args.vel_x, args.vel_y, args.vel_z);
         }
 
+        // Action scale configuration
+        if args.action_scale != 1.0 {
+            println!("✓ Action scale: {:.3}", args.action_scale);
+        }
+
         // Recording mode configuration
         if let Some(ref path) = args.record {
             println!("✓ Recording mode enabled: observations will be saved to {}", path);
@@ -204,6 +214,7 @@ impl Runtime {
             pitch_offset: args.pitch_offset,
             last_action: [0.0; NUM_MOTORS],
             command: [args.vel_x, args.vel_y, args.vel_z],
+            action_scale: args.action_scale,
             log_file,
             start_time: None,
             step_counter: 0,
@@ -288,10 +299,10 @@ impl Runtime {
             [0.0f32; NUM_MOTORS]
         };
 
-        // Convert action offsets to motor targets: init_pos + action
+        // Convert action offsets to motor targets: init_pos + action_scale * action
         let mut motor_targets = [0.0f64; NUM_MOTORS];
         for i in 0..NUM_MOTORS {
-            motor_targets[i] = DEFAULT_POSITION[i] + action[i] as f64;
+            motor_targets[i] = DEFAULT_POSITION[i] + self.action_scale * action[i] as f64;
         }
 
         // Get timestamp for both logging and recording
