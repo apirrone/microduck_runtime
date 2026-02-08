@@ -19,9 +19,39 @@ pub struct Policy {
     standing_mode: Option<PolicyMode>,
     start_time: Instant,
     command_threshold: f64,
+    /// Gait period from ONNX metadata (if available)
+    gait_period: Option<f64>,
 }
 
 impl Policy {
+    /// Try to read gait period from ONNX model metadata
+    fn read_gait_period(session: &Session) -> Option<f64> {
+        match session.metadata() {
+            Ok(metadata) => {
+                // custom() returns Option<String>
+                match metadata.custom("gait_period") {
+                    Some(value) => {
+                        match value.parse::<f64>() {
+                            Ok(period) => {
+                                println!("  Found gait period in ONNX metadata: {:.4}s", period);
+                                Some(period)
+                            }
+                            Err(e) => {
+                                eprintln!("  Warning: Could not parse gait_period metadata: {}", e);
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            }
+            Err(e) => {
+                eprintln!("  Warning: Could not access metadata: {}", e);
+                None
+            }
+        }
+    }
+
     /// Create a new dummy policy that generates squatting motion
     pub fn new_dummy() -> Result<Self> {
         Ok(Self {
@@ -29,6 +59,7 @@ impl Policy {
             standing_mode: None,
             start_time: Instant::now(),
             command_threshold: 0.05,
+            gait_period: None,
         })
     }
 
@@ -42,11 +73,15 @@ impl Policy {
             .with_intra_threads(2)? // Limit threads for Raspberry Pi Zero 2W
             .commit_from_file(model_path)?;
 
+        // Try to read gait period from ONNX metadata
+        let gait_period = Self::read_gait_period(&session);
+
         Ok(Self {
             mode: PolicyMode::Onnx(session),
             standing_mode: None,
             start_time: Instant::now(),
             command_threshold: 0.05,
+            gait_period,
         })
     }
 
@@ -66,17 +101,26 @@ impl Policy {
             .with_intra_threads(2)?
             .commit_from_file(standing_path)?;
 
+        // Try to read gait period from walking policy ONNX metadata
+        let gait_period = Self::read_gait_period(&walking_session);
+
         Ok(Self {
             mode: PolicyMode::Onnx(walking_session),
             standing_mode: Some(PolicyMode::Onnx(standing_session)),
             start_time: Instant::now(),
             command_threshold: 0.05,
+            gait_period,
         })
     }
 
     /// Calculate command magnitude
     fn command_magnitude(command: &[f64; 3]) -> f64 {
         (command[0].powi(2) + command[1].powi(2) + command[2].powi(2)).sqrt()
+    }
+
+    /// Get the gait period from ONNX metadata (if available)
+    pub fn gait_period(&self) -> Option<f64> {
+        self.gait_period
     }
 
     /// Run inference on an observation to get actions

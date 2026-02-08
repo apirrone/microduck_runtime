@@ -161,9 +161,23 @@ impl Runtime {
         }
 
         // Imitation mode configuration
-        if args.imitation {
-            println!("✓ Imitation mode enabled (gait period: {:.3}s)", args.gait_period);
-        }
+        let gait_period = if args.imitation {
+            // Priority 1: Use ONNX metadata if available
+            // Priority 2: Fall back to command-line argument
+            let period = policy.gait_period().unwrap_or(args.gait_period);
+
+            if let Some(onnx_period) = policy.gait_period() {
+                println!("✓ Imitation mode enabled");
+                println!("  Using gait period from ONNX metadata: {:.4}s", onnx_period);
+            } else {
+                println!("✓ Imitation mode enabled");
+                println!("  Using gait period from command-line: {:.4}s", args.gait_period);
+            }
+
+            period
+        } else {
+            args.gait_period  // Not used, but keep default
+        };
 
         // Velocity command configuration
         if args.vel_x != 0.0 || args.vel_y != 0.0 || args.vel_z != 0.0 {
@@ -188,7 +202,7 @@ impl Runtime {
                 .context(format!("Failed to create log file: {}", path))?;
 
             // Write CSV header: step, time, obs_0..obs_N, action_0..action_13
-            let obs_size = if args.imitation { 53 } else { 51 };
+            let obs_size = if args.imitation { 52 } else { 51 };
             write!(file, "step,time")?;
             for i in 0..obs_size {
                 write!(file, ",obs_{}", i)?;
@@ -219,7 +233,7 @@ impl Runtime {
             start_time: None,
             step_counter: 0,
             use_imitation: args.imitation,
-            gait_period: args.gait_period,
+            gait_period,  // Use computed gait_period (from ONNX or CLI)
             imitation_phase: 0.0,
             record_file: args.record.clone(),
             recorded_observations: Vec::new(),

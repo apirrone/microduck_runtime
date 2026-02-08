@@ -2,17 +2,25 @@ use crate::imu::ImuData;
 use crate::motor::{MotorState, NUM_MOTORS, DEFAULT_POSITION};
 
 /// Maximum observation size (with phase)
-pub const MAX_OBSERVATION_SIZE: usize = 53;
+pub const MAX_OBSERVATION_SIZE: usize = 52;
 
 /// Observation vector structure
-/// Layout: [gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14), command(3), phase(2)?]
+///
+/// For velocity task (no imitation):
+/// Layout: [gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14), command(3)]
+/// Total: 51D
+///
+/// For imitation task (with phase):
+/// Layout: [command(3), phase(1), gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14)]
+/// Total: 52D
+///
 /// - gyro: angular velocity in body frame (rad/s)
 /// - projected_gravity: normalized gravity vector in body frame (unit vector)
 /// - joint_pos: relative to DEFAULT_POSITION (rad)
 /// - joint_vel: joint velocities (rad/s)
 /// - last_action: previous action outputs (rad offsets)
 /// - command: [lin_vel_x, lin_vel_y, ang_vel_z] velocity commands
-/// - phase: [cos(phase*2π), sin(phase*2π)] - optional imitation phase (2D)
+/// - phase: raw phase value [0, 1) - optional imitation phase (1D)
 #[derive(Debug, Clone)]
 pub struct Observation {
     data: [f32; MAX_OBSERVATION_SIZE],
@@ -30,6 +38,19 @@ impl Observation {
     ) -> Self {
         let mut data = [0.0f32; MAX_OBSERVATION_SIZE];
         let mut idx = 0;
+
+        // For imitation task: command and phase come FIRST
+        if let Some(phase_val) = phase {
+            // Velocity commands (3) - [lin_vel_x, lin_vel_y, ang_vel_z]
+            for i in 0..3 {
+                data[idx] = command[i] as f32;
+                idx += 1;
+            }
+
+            // Imitation phase (1) - raw phase value [0, 1)
+            data[idx] = phase_val as f32;
+            idx += 1;
+        }
 
         // Angular velocity (3) - base_ang_vel in RL env
         for i in 0..3 {
@@ -61,23 +82,17 @@ impl Observation {
             idx += 1;
         }
 
-        // Velocity commands (3) - [lin_vel_x, lin_vel_y, ang_vel_z]
-        for i in 0..3 {
-            data[idx] = command[i] as f32;
-            idx += 1;
-        }
-
-        // Imitation phase (2) - [cos, sin] (optional)
-        if let Some(phase_val) = phase {
-            let angle = phase_val * 2.0 * std::f64::consts::PI;
-            data[idx] = angle.cos() as f32;
-            idx += 1;
-            data[idx] = angle.sin() as f32;
-            idx += 1;
+        // For velocity task: command comes LAST
+        if phase.is_none() {
+            // Velocity commands (3) - [lin_vel_x, lin_vel_y, ang_vel_z]
+            for i in 0..3 {
+                data[idx] = command[i] as f32;
+                idx += 1;
+            }
         }
 
         let size = idx;
-        assert!(size == 51 || size == 53, "Observation size must be 51 or 53, got {}", size);
+        assert!(size == 51 || size == 52, "Observation size must be 51 or 52, got {}", size);
 
         Self { data, size }
     }
@@ -156,24 +171,32 @@ mod tests {
             gyro: [0.0; 3],
             accel: [0.0, 0.0, -1.0],
         };
-        let command = [0.0; 3];
+        let command = [0.1, 0.2, 0.3];
         let motor_state = MotorState::default();
         let last_action = [0.0f32; NUM_MOTORS];
 
         // Test with phase = 0.0
         let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.0));
-        assert_eq!(obs.size(), 53);
+        assert_eq!(obs.size(), 52);
         let slice = obs.as_slice();
-        // phase = 0 -> cos(0) = 1, sin(0) = 0
-        assert!((slice[51] - 1.0).abs() < 0.001);
-        assert!((slice[52] - 0.0).abs() < 0.001);
+
+        // For imitation: command(3) + phase(1) comes first
+        assert_eq!(slice[0], 0.1);  // command[0]
+        assert_eq!(slice[1], 0.2);  // command[1]
+        assert_eq!(slice[2], 0.3);  // command[2]
+        assert_eq!(slice[3], 0.0);  // phase = 0.0
 
         // Test with phase = 0.25
         let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.25));
-        assert_eq!(obs.size(), 53);
+        assert_eq!(obs.size(), 52);
         let slice = obs.as_slice();
-        // phase = 0.25 -> cos(π/2) = 0, sin(π/2) = 1
-        assert!((slice[51] - 0.0).abs() < 0.001);
-        assert!((slice[52] - 1.0).abs() < 0.001);
+        // phase = 0.25 -> raw value is 0.25
+        assert_eq!(slice[3], 0.25);
+
+        // Test with phase = 0.75
+        let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.75));
+        assert_eq!(obs.size(), 52);
+        let slice = obs.as_slice();
+        assert_eq!(slice[3], 0.75);
     }
 }
