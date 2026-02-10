@@ -2,6 +2,7 @@ mod imu;
 mod motor;
 mod observation;
 mod policy;
+mod controller;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -9,6 +10,7 @@ use imu::ImuController;
 use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION};
 use observation::Observation;
 use policy::Policy;
+use controller::Controller;
 use serde::Serialize;
 use std::fs::File;
 use std::io::Write as IoWrite;
@@ -109,6 +111,22 @@ struct Args {
     /// Enable recording mode: save observations to pickle file on Ctrl+C
     #[arg(short, long)]
     record: Option<String>,
+
+    /// Enable Xbox controller input for velocity commands
+    #[arg(short, long)]
+    controller: bool,
+
+    /// Maximum linear velocity for controller input (m/s)
+    #[arg(long, default_value_t = 0.4)]
+    max_linear_vel: f64,
+
+    /// Maximum angular velocity for controller input (rad/s)
+    #[arg(long, default_value_t = 1.5)]
+    max_angular_vel: f64,
+
+    /// Controller deadzone (0.0-1.0)
+    #[arg(long, default_value_t = 0.1)]
+    controller_deadzone: f32,
 }
 
 
@@ -117,6 +135,7 @@ struct Runtime {
     motor_controller: MotorController,
     imu_controller: ImuController,
     policy: Policy,
+    controller: Option<Controller>,
     control_freq: u32,
     pid_gains: (u16, u16, u16), // (kP, kI, kD)
     pitch_offset: f64,
@@ -132,6 +151,9 @@ struct Runtime {
     record_file: Option<String>,
     recorded_observations: Vec<TimestampedObservation>,
     policy_enabled: bool,  // Controls whether policy inference runs
+    max_linear_vel: f64,
+    max_angular_vel: f64,
+    controller_deadzone: f32,
 }
 
 impl Runtime {
@@ -217,6 +239,24 @@ impl Runtime {
             println!("✓ Recording mode enabled: observations will be saved to {}", path);
         }
 
+        // Controller configuration
+        let controller = if args.controller {
+            println!("Initializing Xbox controller...");
+            let mut ctrl = Controller::new()
+                .context("Failed to initialize controller")?;
+            ctrl.wait_for_connection()
+                .context("Failed to connect to controller")?;
+            if let Some(name) = ctrl.get_controller_name() {
+                println!("✓ Controller connected: {}", name);
+            }
+            println!("  Max linear velocity: {:.2} m/s", args.max_linear_vel);
+            println!("  Max angular velocity: {:.2} rad/s", args.max_angular_vel);
+            println!("  Deadzone: {:.2}", args.controller_deadzone);
+            Some(ctrl)
+        } else {
+            None
+        };
+
         // Initialize log file if requested
         let mut log_file = None;
         if let Some(ref path) = args.log_file {
@@ -245,6 +285,7 @@ impl Runtime {
             motor_controller,
             imu_controller,
             policy,
+            controller,
             control_freq: args.freq,
             pid_gains: (args.kp, args.ki, args.kd),
             pitch_offset: args.pitch_offset,
@@ -260,6 +301,9 @@ impl Runtime {
             record_file: args.record.clone(),
             recorded_observations: Vec::new(),
             policy_enabled,
+            max_linear_vel: args.max_linear_vel,
+            max_angular_vel: args.max_angular_vel,
+            controller_deadzone: args.controller_deadzone,
         })
     }
 
@@ -283,6 +327,27 @@ impl Runtime {
 
     /// Run one control loop iteration
     fn control_step(&mut self) -> Result<()> {
+        // Update controller input if enabled
+        if let Some(ref mut controller) = self.controller {
+            controller.update()
+                .context("Failed to update controller")?;
+
+            let state = controller.get_state();
+
+            // Apply deadzone to stick inputs
+            let left_y = Controller::apply_deadzone(state.left_stick_y, self.controller_deadzone);
+            let left_x = Controller::apply_deadzone(state.left_stick_x, self.controller_deadzone);
+            let right_x = Controller::apply_deadzone(state.right_stick_x, self.controller_deadzone);
+
+            // Map controller to velocity commands:
+            // - Left stick Y (positive) → vel_x (positive)
+            // - Left stick X (positive) → vel_y (positive)
+            // - Right stick X (positive) → vel_z (positive)
+            self.command[0] = left_y as f64 * self.max_linear_vel;
+            self.command[1] = left_x as f64 * self.max_linear_vel;
+            self.command[2] = right_x as f64 * self.max_angular_vel;
+        }
+
         // Read IMU data
         let mut imu_data = self.imu_controller.read()
             .context("Failed to read IMU data")?;
@@ -476,8 +541,19 @@ impl Runtime {
                     Err(_) => "Current read failed".to_string(),
                 };
 
+                // Build velocity command string if controller is active or commands are non-zero
+                let cmd_str = if self.controller.is_some() ||
+                              self.command[0].abs() > 0.001 ||
+                              self.command[1].abs() > 0.001 ||
+                              self.command[2].abs() > 0.001 {
+                    format!(" | Cmd: [{:.2}, {:.2}, {:.2}]",
+                            self.command[0], self.command[1], self.command[2])
+                } else {
+                    String::new()
+                };
+
                 println!(
-                    "⏱️  Runtime: {:.1}s | Iter: {} | Avg: {:.2}ms ({:.1}%) | Min: {:.2}ms | Max: {:.2}ms | Jitter: {:.2}ms | Freq: {:.1}Hz | {}",
+                    "⏱️  Runtime: {:.1}s | Iter: {} | Avg: {:.2}ms ({:.1}%) | Min: {:.2}ms | Max: {:.2}ms | Jitter: {:.2}ms | Freq: {:.1}Hz | {}{}",
                     total_elapsed,
                     iteration,
                     avg_time.as_secs_f64() * 1000.0,
@@ -486,7 +562,8 @@ impl Runtime {
                     max_loop_time.as_secs_f64() * 1000.0,
                     jitter * 1000.0,
                     actual_freq,
-                    current_str
+                    current_str,
+                    cmd_str
                 );
 
                 // Reset jitter tracking for next interval
