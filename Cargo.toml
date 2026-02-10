@@ -59,6 +59,10 @@ path = "src/bin/test_imu_fusion_latency.rs"
 name = "test_motor_latency"
 path = "src/bin/test_motor_latency.rs"
 
+[[bin]]
+name = "test_controller"
+path = "src/bin/test_controller.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
@@ -73,3 +77,4 @@ linux-embedded-hal = "0.4"
 tokio = { version = "1", features = ["rt", "time", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde-pickle = "1.1"
+gilrs = "0.10"
