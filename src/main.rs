@@ -65,6 +65,19 @@ struct Args {
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     pitch_offset: f64,
 
+    /// Gravity offset to subtract from projected gravity [x,y,z]
+    /// Compensates for IMU mounting angle or calibration bias
+    /// Measure by recording gravity when robot is standing upright
+    /// Example: --gravity-offset-x -0.086 (if upright shows g_x=-0.086)
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    gravity_offset_x: f64,
+
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    gravity_offset_y: f64,
+
+    #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
+    gravity_offset_z: f64,
+
     /// Optional CSV log file to save observations and actions
     #[arg(long)]
     log_file: Option<String>,
@@ -132,9 +145,18 @@ impl Runtime {
         println!("✓ Motor controller initialized on {} at {} baud", args.port, args.baudrate);
 
         // Initialize IMU controller (BNO055 on I2C)
-        let imu_controller = ImuController::new_default()
+        let mut imu_controller = ImuController::new_default()
             .context("Failed to initialize IMU controller (BNO055 on /dev/i2c-1)")?;
         println!("✓ IMU controller initialized (BNO055)");
+
+        // Set gravity offset if specified
+        if args.gravity_offset_x != 0.0 || args.gravity_offset_y != 0.0 || args.gravity_offset_z != 0.0 {
+            imu_controller.set_gravity_offset([
+                args.gravity_offset_x,
+                args.gravity_offset_y,
+                args.gravity_offset_z,
+            ]);
+        }
 
         // Initialize policy based on arguments
         let policy = if args.dummy {

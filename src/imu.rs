@@ -30,6 +30,10 @@ impl Default for ImuData {
 pub struct ImuController {
     imu: Bno055<I2cdev>,
     delay: Delay,
+    /// Gravity calibration offset to apply (subtracted from computed gravity)
+    /// This compensates for IMU mounting angle or calibration bias
+    /// Determined by measuring gravity when robot is standing upright
+    gravity_offset: [f64; 3],
 }
 
 impl ImuController {
@@ -78,7 +82,11 @@ impl ImuController {
         imu.set_mode(bno055::BNO055OperationMode::NDOF, &mut delay)
             .map_err(|e| anyhow::anyhow!("Failed to set NDOF mode: {:?}", e))?;
 
-        let mut controller = Self { imu, delay };
+        let mut controller = Self {
+            imu,
+            delay,
+            gravity_offset: [0.0; 3],  // No offset by default
+        };
 
         // Automatically load calibration if it exists
         match controller.load_calibration() {
@@ -168,6 +176,19 @@ impl ImuController {
         Ok(())
     }
 
+    /// Set gravity calibration offset
+    /// Call this after measuring gravity when robot is standing upright
+    /// The offset will be subtracted from all future gravity readings
+    pub fn set_gravity_offset(&mut self, offset: [f64; 3]) {
+        self.gravity_offset = offset;
+        println!("Set gravity offset: [{:.4}, {:.4}, {:.4}]", offset[0], offset[1], offset[2]);
+    }
+
+    /// Get current gravity offset
+    pub fn get_gravity_offset(&self) -> [f64; 3] {
+        self.gravity_offset
+    }
+
     /// Rotate a vector by a quaternion
     /// Quaternion format: [w, x, y, z] (scalar-first convention)
     fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
@@ -227,13 +248,20 @@ impl ImuController {
         let world_gravity = [0.0, 0.0, -9.81];
         let proj_grav_ms2 = Self::quat_rotate_vec(quat, world_gravity);
 
+        // Apply calibration offset (compensates for IMU mounting angle / bias)
+        let proj_grav_corrected = [
+            proj_grav_ms2[0] - self.gravity_offset[0],
+            proj_grav_ms2[1] - self.gravity_offset[1],
+            proj_grav_ms2[2] - self.gravity_offset[2],
+        ];
+
         // Normalize to unit vector (MuJoCo expects normalized projected gravity)
-        let mag = (proj_grav_ms2[0].powi(2) + proj_grav_ms2[1].powi(2) + proj_grav_ms2[2].powi(2)).sqrt();
+        let mag = (proj_grav_corrected[0].powi(2) + proj_grav_corrected[1].powi(2) + proj_grav_corrected[2].powi(2)).sqrt();
         let proj_grav = if mag > 0.1 {
             [
-                proj_grav_ms2[0] / mag,
-                proj_grav_ms2[1] / mag,
-                proj_grav_ms2[2] / mag,
+                proj_grav_corrected[0] / mag,
+                proj_grav_corrected[1] / mag,
+                proj_grav_corrected[2] / mag,
             ]
         } else {
             [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
