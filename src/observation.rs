@@ -58,7 +58,7 @@ impl Observation {
             idx += 1;
         }
 
-        // Projected gravity (3) - gravity vector in body frame
+        // Raw accelerometer (3) - includes gravity + linear acceleration + dynamics
         for i in 0..3 {
             data[idx] = imu.accel[i] as f32;
             idx += 1;

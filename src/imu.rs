@@ -213,9 +213,9 @@ impl ImuController {
     }
 
     /// Read current IMU data
-    /// Returns gyroscope (rad/s) and normalized projected gravity (unit vector)
-    /// Projected gravity is computed by rotating world-frame gravity [0, 0, -9.81]
-    /// into body frame using the IMU's orientation estimate (quaternion from sensor fusion)
+    /// Returns gyroscope (rad/s) and normalized raw accelerometer reading (unit vector)
+    /// Raw accelerometer is read directly from BNO055 sensor (includes gravity + linear acceleration)
+    /// This matches what the policy was trained with in simulation
     pub fn read(&mut self) -> Result<ImuData> {
         // Read gyroscope (hardware-remapped, in 1/16 deg/s)
         let gyro = self.imu.gyro_data()
@@ -241,41 +241,41 @@ impl ImuController {
             accel.z as f64,
         ];
 
-        // Compute normalized "projected gravity" from raw accelerometer
+        // Normalize raw accelerometer reading
         // Accelerometer measures normal force (pointing up when at rest)
-        // Projected gravity is opposite direction (pointing down)
-        let proj_grav_raw = [
+        // Negate to get gravity direction (pointing down)
+        let accel_negated = [
             -accel_ms2[0],
             -accel_ms2[1],
             -accel_ms2[2],
         ];
 
         // Normalize to unit vector
-        let mag = (proj_grav_raw[0].powi(2) + proj_grav_raw[1].powi(2) + proj_grav_raw[2].powi(2)).sqrt();
-        let proj_grav_normalized = if mag > 0.1 {
+        let mag = (accel_negated[0].powi(2) + accel_negated[1].powi(2) + accel_negated[2].powi(2)).sqrt();
+        let accel_normalized = if mag > 0.1 {
             [
-                proj_grav_raw[0] / mag,
-                proj_grav_raw[1] / mag,
-                proj_grav_raw[2] / mag,
+                accel_negated[0] / mag,
+                accel_negated[1] / mag,
+                accel_negated[2] / mag,
             ]
         } else {
             [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
         };
 
         // Apply calibration offset (in unit vector space)
-        let proj_grav_corrected = [
-            proj_grav_normalized[0] - self.gravity_offset[0],
-            proj_grav_normalized[1] - self.gravity_offset[1],
-            proj_grav_normalized[2] - self.gravity_offset[2],
+        let accel_corrected = [
+            accel_normalized[0] - self.gravity_offset[0],
+            accel_normalized[1] - self.gravity_offset[1],
+            accel_normalized[2] - self.gravity_offset[2],
         ];
 
         // Renormalize after offset
-        let mag2 = (proj_grav_corrected[0].powi(2) + proj_grav_corrected[1].powi(2) + proj_grav_corrected[2].powi(2)).sqrt();
-        let proj_grav = if mag2 > 0.1 {
+        let mag2 = (accel_corrected[0].powi(2) + accel_corrected[1].powi(2) + accel_corrected[2].powi(2)).sqrt();
+        let accel_final = if mag2 > 0.1 {
             [
-                proj_grav_corrected[0] / mag2,
-                proj_grav_corrected[1] / mag2,
-                proj_grav_corrected[2] / mag2,
+                accel_corrected[0] / mag2,
+                accel_corrected[1] / mag2,
+                accel_corrected[2] / mag2,
             ]
         } else {
             [0.0, 0.0, -1.0]
@@ -283,7 +283,7 @@ impl ImuController {
 
         Ok(ImuData {
             gyro: gyro_rad_s,
-            accel: proj_grav,
+            accel: accel_final,
         })
     }
 
