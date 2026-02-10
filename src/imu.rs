@@ -3,10 +3,6 @@ use linux_embedded_hal::{Delay, I2cdev};
 use bno055::{Bno055, AxisRemap, BNO055AxisConfig, BNO055AxisSign, BNO055Calibration};
 use std::fs;
 use std::path::PathBuf;
-use std::io::{Read as IoRead, Write as IoWrite};
-use std::os::unix::io::AsRawFd;
-use std::thread;
-use std::time::Duration;
 
 /// IMU data containing gyroscope and normalized projected gravity
 #[derive(Debug, Clone, Copy)]
@@ -173,11 +169,13 @@ impl ImuController {
     }
 
     /// Rotate a vector by a quaternion
-    /// Quaternion format: [w, x, y, z]
+    /// Quaternion format: [w, x, y, z] (scalar-first convention)
     fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
         let [w, qx, qy, qz] = quat;
         let [vx, vy, vz] = vec;
 
+        // Compute quaternion-vector rotation: v' = q * v * q^(-1)
+        // Using optimized formula: v' = v + 2 * cross(q.xyz, cross(q.xyz, v) + w * v)
         let cx = qy * vz - qz * vy;
         let cy = qz * vx - qx * vz;
         let cz = qx * vy - qy * vx;
@@ -191,54 +189,6 @@ impl ImuController {
             vy + 2.0 * cy2,
             vz + 2.0 * cz2,
         ]
-    }
-
-    /// Read quaternion directly from BNO055 via I2C
-    /// Returns quaternion in [w, x, y, z] format
-    fn read_quaternion(&mut self) -> Result<[f64; 4]> {
-        use std::fs::OpenOptions;
-
-        // Open I2C device
-        let i2c_device = "/dev/i2c-1";
-        let address = 0x29u8; // Alternative address
-        let mut i2c = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(i2c_device)
-            .context("Failed to open I2C device for quaternion reading")?;
-
-        // Set I2C slave address
-        const I2C_SLAVE: u16 = 0x0703;
-        unsafe {
-            if libc::ioctl(
-                i2c.as_raw_fd(),
-                I2C_SLAVE as libc::c_ulong,
-                address as libc::c_ulong,
-            ) < 0
-            {
-                return Err(anyhow::anyhow!("Failed to set I2C slave address"));
-            }
-        }
-
-        // Read quaternion data
-        const BNO055_QUA_DATA_W_LSB: u8 = 0x20;
-        let mut quat_buffer = [0u8; 8];
-        i2c.write(&[BNO055_QUA_DATA_W_LSB])
-            .context("Failed to write quaternion register address")?;
-        thread::sleep(Duration::from_micros(100));
-        i2c.read(&mut quat_buffer)
-            .context("Failed to read quaternion data")?;
-
-        // Convert to quaternion (BNO055 scale: 1 LSB = 1/16384)
-        let scale = 1.0 / 16384.0;
-        let quat = [
-            i16::from_le_bytes([quat_buffer[0], quat_buffer[1]]) as f64 * scale, // w
-            i16::from_le_bytes([quat_buffer[2], quat_buffer[3]]) as f64 * scale, // x
-            i16::from_le_bytes([quat_buffer[4], quat_buffer[5]]) as f64 * scale, // y
-            i16::from_le_bytes([quat_buffer[6], quat_buffer[7]]) as f64 * scale, // z
-        ];
-
-        Ok(quat)
     }
 
     /// Read current IMU data
@@ -258,9 +208,18 @@ impl ImuController {
             gyro.z as f64 * gyro_scale,
         ];
 
-        // Read quaternion from IMU's sensor fusion
-        let quat = self.read_quaternion()
-            .context("Failed to read quaternion")?;
+        // Read quaternion from IMU's sensor fusion (NDOF mode)
+        let quat_mint = self.imu.quaternion()
+            .map_err(|e| anyhow::anyhow!("Failed to read quaternion: {:?}", e))?;
+
+        // Convert mint::Quaternion to [w, x, y, z] array
+        // mint::Quaternion stores as: s (scalar/w), v.x, v.y, v.z
+        let quat = [
+            quat_mint.s as f64,    // w (scalar part)
+            quat_mint.v.x as f64,  // x (vector part)
+            quat_mint.v.y as f64,  // y
+            quat_mint.v.z as f64,  // z
+        ];
 
         // Compute projected gravity by rotating world-frame gravity into body frame
         // World gravity: [0, 0, -9.81] pointing downward
