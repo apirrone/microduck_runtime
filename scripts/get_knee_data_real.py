@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Get knee data from real robot with sine wave motion.
-Records [position, last_action] data.
+Records [timestamp, position, velocity, last_action] data.
 """
 
 from rustypot import Xl330PyController
@@ -95,10 +95,13 @@ def main():
         if t > duration:
             break
 
-        obs = c.sync_read_present_position([left_knee_id])[0]
+        # Read position and velocity
+        pos = c.sync_read_present_position([left_knee_id])[0]
+        vel_raw = c.sync_read_present_velocity([left_knee_id])[0]
+        vel = convert_speed(vel_raw)
 
-        # Record [timestamp, position, last_action]
-        data.append([t, obs, last_action])
+        # Record [timestamp, position, velocity, last_action]
+        data.append([t, pos, vel, last_action])
 
         action = amplitude * np.sin(2 * np.pi * frequency * t)
 

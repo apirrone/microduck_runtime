@@ -3,6 +3,10 @@ use linux_embedded_hal::{Delay, I2cdev};
 use bno055::{Bno055, AxisRemap, BNO055AxisConfig, BNO055AxisSign, BNO055Calibration};
 use std::fs;
 use std::path::PathBuf;
+use std::io::{Read as IoRead, Write as IoWrite};
+use std::os::unix::io::AsRawFd;
+use std::thread;
+use std::time::Duration;
 
 /// IMU data containing gyroscope and normalized projected gravity
 #[derive(Debug, Clone, Copy)]
@@ -10,7 +14,9 @@ pub struct ImuData {
     /// Gyroscope data [x, y, z] in rad/s (angular velocity in body frame)
     pub gyro: [f64; 3],
     /// Normalized projected gravity [x, y, z] (unit vector in body frame)
-    /// Computed as: normalize(-accelerometer)
+    /// Computed by rotating world gravity [0, 0, -9.81] into body frame using
+    /// the IMU's orientation estimate (quaternion from NDOF sensor fusion).
+    /// This gives clean gravity free from dynamic accelerations and noise.
     /// When at rest upright: points down [0, 0, -1]
     pub accel: [f64; 3],
 }
@@ -166,23 +172,83 @@ impl ImuController {
         Ok(())
     }
 
+    /// Rotate a vector by a quaternion
+    /// Quaternion format: [w, x, y, z]
+    fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
+        let [w, qx, qy, qz] = quat;
+        let [vx, vy, vz] = vec;
+
+        let cx = qy * vz - qz * vy;
+        let cy = qz * vx - qx * vz;
+        let cz = qx * vy - qy * vx;
+
+        let cx2 = cy * qz - cz * qy + w * cx;
+        let cy2 = cz * qx - cx * qz + w * cy;
+        let cz2 = cx * qy - cy * qx + w * cz;
+
+        [
+            vx + 2.0 * cx2,
+            vy + 2.0 * cy2,
+            vz + 2.0 * cz2,
+        ]
+    }
+
+    /// Read quaternion directly from BNO055 via I2C
+    /// Returns quaternion in [w, x, y, z] format
+    fn read_quaternion(&mut self) -> Result<[f64; 4]> {
+        use std::fs::OpenOptions;
+
+        // Open I2C device
+        let i2c_device = "/dev/i2c-1";
+        let address = 0x29u8; // Alternative address
+        let mut i2c = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(i2c_device)
+            .context("Failed to open I2C device for quaternion reading")?;
+
+        // Set I2C slave address
+        const I2C_SLAVE: u16 = 0x0703;
+        unsafe {
+            if libc::ioctl(
+                i2c.as_raw_fd(),
+                I2C_SLAVE as libc::c_ulong,
+                address as libc::c_ulong,
+            ) < 0
+            {
+                return Err(anyhow::anyhow!("Failed to set I2C slave address"));
+            }
+        }
+
+        // Read quaternion data
+        const BNO055_QUA_DATA_W_LSB: u8 = 0x20;
+        let mut quat_buffer = [0u8; 8];
+        i2c.write(&[BNO055_QUA_DATA_W_LSB])
+            .context("Failed to write quaternion register address")?;
+        thread::sleep(Duration::from_micros(100));
+        i2c.read(&mut quat_buffer)
+            .context("Failed to read quaternion data")?;
+
+        // Convert to quaternion (BNO055 scale: 1 LSB = 1/16384)
+        let scale = 1.0 / 16384.0;
+        let quat = [
+            i16::from_le_bytes([quat_buffer[0], quat_buffer[1]]) as f64 * scale, // w
+            i16::from_le_bytes([quat_buffer[2], quat_buffer[3]]) as f64 * scale, // x
+            i16::from_le_bytes([quat_buffer[4], quat_buffer[5]]) as f64 * scale, // y
+            i16::from_le_bytes([quat_buffer[6], quat_buffer[7]]) as f64 * scale, // z
+        ];
+
+        Ok(quat)
+    }
+
     /// Read current IMU data
     /// Returns gyroscope (rad/s) and normalized projected gravity (unit vector)
+    /// Projected gravity is computed by rotating world-frame gravity [0, 0, -9.81]
+    /// into body frame using the IMU's orientation estimate (quaternion from sensor fusion)
     pub fn read(&mut self) -> Result<ImuData> {
-        // Read accelerometer (hardware-remapped, in m/s²)
-        let accel = self.imu.accel_data()
-            .map_err(|e| anyhow::anyhow!("Failed to read accelerometer: {:?}", e))?;
-
         // Read gyroscope (hardware-remapped, in 1/16 deg/s)
         let gyro = self.imu.gyro_data()
             .map_err(|e| anyhow::anyhow!("Failed to read gyroscope: {:?}", e))?;
-
-        // Convert accelerometer to f64 (already in m/s²)
-        let accel_ms2 = [
-            accel.x as f64,
-            accel.y as f64,
-            accel.z as f64,
-        ];
 
         // Convert gyroscope to rad/s (from 1/16 deg/s)
         let gyro_scale = std::f64::consts::PI / 180.0;
@@ -192,22 +258,23 @@ impl ImuController {
             gyro.z as f64 * gyro_scale,
         ];
 
-        // Compute normalized projected gravity
-        // Accelerometer measures normal force (pointing up when at rest)
-        // Projected gravity is opposite direction (pointing down)
-        let proj_grav_raw = [
-            -accel_ms2[0],
-            -accel_ms2[1],
-            -accel_ms2[2],
-        ];
+        // Read quaternion from IMU's sensor fusion
+        let quat = self.read_quaternion()
+            .context("Failed to read quaternion")?;
+
+        // Compute projected gravity by rotating world-frame gravity into body frame
+        // World gravity: [0, 0, -9.81] pointing downward
+        // This matches how MuJoCo/simulation computes projected gravity
+        let world_gravity = [0.0, 0.0, -9.81];
+        let proj_grav_ms2 = Self::quat_rotate_vec(quat, world_gravity);
 
         // Normalize to unit vector (MuJoCo expects normalized projected gravity)
-        let mag = (proj_grav_raw[0].powi(2) + proj_grav_raw[1].powi(2) + proj_grav_raw[2].powi(2)).sqrt();
+        let mag = (proj_grav_ms2[0].powi(2) + proj_grav_ms2[1].powi(2) + proj_grav_ms2[2].powi(2)).sqrt();
         let proj_grav = if mag > 0.1 {
             [
-                proj_grav_raw[0] / mag,
-                proj_grav_raw[1] / mag,
-                proj_grav_raw[2] / mag,
+                proj_grav_ms2[0] / mag,
+                proj_grav_ms2[1] / mag,
+                proj_grav_ms2[2] / mag,
             ]
         } else {
             [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
