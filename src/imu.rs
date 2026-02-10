@@ -9,10 +9,10 @@ use std::path::PathBuf;
 pub struct ImuData {
     /// Gyroscope data [x, y, z] in rad/s (angular velocity in body frame)
     pub gyro: [f64; 3],
-    /// Normalized projected gravity [x, y, z] (unit vector in body frame)
-    /// Computed by rotating world gravity [0, 0, -9.81] into body frame using
-    /// the IMU's orientation estimate (quaternion from NDOF sensor fusion).
-    /// This gives clean gravity free from dynamic accelerations and noise.
+    /// Normalized "projected gravity" from raw accelerometer [x, y, z] (unit vector in body frame)
+    /// Computed from raw accelerometer reading (includes gravity + linear acceleration).
+    /// This is what a real IMU sensor measures: normalized(-accelerometer).
+    /// Includes dynamic accelerations, impacts, and vibrations (unlike pure projected gravity).
     /// When at rest upright: points down [0, 0, -1]
     pub accel: [f64; 3],
 }
@@ -229,46 +229,47 @@ impl ImuController {
             gyro.z as f64 * gyro_scale,
         ];
 
-        // Read quaternion from IMU's sensor fusion (NDOF mode)
-        let quat_mint = self.imu.quaternion()
-            .map_err(|e| anyhow::anyhow!("Failed to read quaternion: {:?}", e))?;
+        // Read raw accelerometer (hardware-remapped, in m/s²)
+        // This includes BOTH gravity and linear acceleration (like real IMU sensor)
+        let accel = self.imu.accel_data()
+            .map_err(|e| anyhow::anyhow!("Failed to read accelerometer: {:?}", e))?;
 
-        // Convert mint::Quaternion to [w, x, y, z] array
-        // mint::Quaternion stores as: s (scalar/w), v.x, v.y, v.z
-        let quat = [
-            quat_mint.s as f64,    // w (scalar part)
-            quat_mint.v.x as f64,  // x (vector part)
-            quat_mint.v.y as f64,  // y
-            quat_mint.v.z as f64,  // z
+        // Convert accelerometer to f64 (already in m/s²)
+        let accel_ms2 = [
+            accel.x as f64,
+            accel.y as f64,
+            accel.z as f64,
         ];
 
-        // Compute projected gravity by rotating world-frame gravity into body frame
-        // World gravity: [0, 0, -9.81] pointing downward
-        // This matches how MuJoCo/simulation computes projected gravity
-        let world_gravity = [0.0, 0.0, -9.81];
-        let proj_grav_ms2 = Self::quat_rotate_vec(quat, world_gravity);
+        // Compute normalized "projected gravity" from raw accelerometer
+        // Accelerometer measures normal force (pointing up when at rest)
+        // Projected gravity is opposite direction (pointing down)
+        let proj_grav_raw = [
+            -accel_ms2[0],
+            -accel_ms2[1],
+            -accel_ms2[2],
+        ];
 
-        // Normalize to unit vector first (MuJoCo expects normalized projected gravity)
-        let mag = (proj_grav_ms2[0].powi(2) + proj_grav_ms2[1].powi(2) + proj_grav_ms2[2].powi(2)).sqrt();
+        // Normalize to unit vector
+        let mag = (proj_grav_raw[0].powi(2) + proj_grav_raw[1].powi(2) + proj_grav_raw[2].powi(2)).sqrt();
         let proj_grav_normalized = if mag > 0.1 {
             [
-                proj_grav_ms2[0] / mag,
-                proj_grav_ms2[1] / mag,
-                proj_grav_ms2[2] / mag,
+                proj_grav_raw[0] / mag,
+                proj_grav_raw[1] / mag,
+                proj_grav_raw[2] / mag,
             ]
         } else {
             [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
         };
 
-        // Apply calibration offset AFTER normalization (in unit vector space)
-        // This compensates for IMU mounting angle or calibration bias
+        // Apply calibration offset (in unit vector space)
         let proj_grav_corrected = [
             proj_grav_normalized[0] - self.gravity_offset[0],
             proj_grav_normalized[1] - self.gravity_offset[1],
             proj_grav_normalized[2] - self.gravity_offset[2],
         ];
 
-        // Renormalize after applying offset to maintain unit vector
+        // Renormalize after offset
         let mag2 = (proj_grav_corrected[0].powi(2) + proj_grav_corrected[1].powi(2) + proj_grav_corrected[2].powi(2)).sqrt();
         let proj_grav = if mag2 > 0.1 {
             [
@@ -277,7 +278,7 @@ impl ImuController {
                 proj_grav_corrected[2] / mag2,
             ]
         } else {
-            [0.0, 0.0, -1.0] // Fallback if offset makes magnitude too small
+            [0.0, 0.0, -1.0]
         };
 
         Ok(ImuData {
