@@ -248,23 +248,36 @@ impl ImuController {
         let world_gravity = [0.0, 0.0, -9.81];
         let proj_grav_ms2 = Self::quat_rotate_vec(quat, world_gravity);
 
-        // Apply calibration offset (compensates for IMU mounting angle / bias)
-        let proj_grav_corrected = [
-            proj_grav_ms2[0] - self.gravity_offset[0],
-            proj_grav_ms2[1] - self.gravity_offset[1],
-            proj_grav_ms2[2] - self.gravity_offset[2],
-        ];
-
-        // Normalize to unit vector (MuJoCo expects normalized projected gravity)
-        let mag = (proj_grav_corrected[0].powi(2) + proj_grav_corrected[1].powi(2) + proj_grav_corrected[2].powi(2)).sqrt();
-        let proj_grav = if mag > 0.1 {
+        // Normalize to unit vector first (MuJoCo expects normalized projected gravity)
+        let mag = (proj_grav_ms2[0].powi(2) + proj_grav_ms2[1].powi(2) + proj_grav_ms2[2].powi(2)).sqrt();
+        let proj_grav_normalized = if mag > 0.1 {
             [
-                proj_grav_corrected[0] / mag,
-                proj_grav_corrected[1] / mag,
-                proj_grav_corrected[2] / mag,
+                proj_grav_ms2[0] / mag,
+                proj_grav_ms2[1] / mag,
+                proj_grav_ms2[2] / mag,
             ]
         } else {
             [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
+        };
+
+        // Apply calibration offset AFTER normalization (in unit vector space)
+        // This compensates for IMU mounting angle or calibration bias
+        let proj_grav_corrected = [
+            proj_grav_normalized[0] - self.gravity_offset[0],
+            proj_grav_normalized[1] - self.gravity_offset[1],
+            proj_grav_normalized[2] - self.gravity_offset[2],
+        ];
+
+        // Renormalize after applying offset to maintain unit vector
+        let mag2 = (proj_grav_corrected[0].powi(2) + proj_grav_corrected[1].powi(2) + proj_grav_corrected[2].powi(2)).sqrt();
+        let proj_grav = if mag2 > 0.1 {
+            [
+                proj_grav_corrected[0] / mag2,
+                proj_grav_corrected[1] / mag2,
+                proj_grav_corrected[2] / mag2,
+            ]
+        } else {
+            [0.0, 0.0, -1.0] // Fallback if offset makes magnitude too small
         };
 
         Ok(ImuData {
