@@ -185,7 +185,7 @@ impl ImuController {
         ];
 
         // Convert gyroscope to rad/s (from 1/16 deg/s)
-        let gyro_scale = std::f64::consts::PI / (16.0 * 180.0);
+        let gyro_scale = std::f64::consts::PI / 180.0;
         let gyro_rad_s = [
             gyro.x as f64 * gyro_scale,
             gyro.y as f64 * gyro_scale,
