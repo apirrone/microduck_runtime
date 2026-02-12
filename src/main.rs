@@ -264,7 +264,7 @@ impl Runtime {
                 .context(format!("Failed to create log file: {}", path))?;
 
             // Write CSV header: step, time, obs_0..obs_N, action_0..action_13
-            let obs_size = if args.imitation { 52 } else { 51 };
+            let obs_size = if args.imitation { 53 } else { 51 };
             write!(file, "step,time")?;
             for i in 0..obs_size {
                 write!(file, ",obs_{}", i)?;
@@ -326,7 +326,7 @@ impl Runtime {
     }
 
     /// Run one control loop iteration
-    fn control_step(&mut self) -> Result<()> {
+    fn control_step(&mut self, actual_dt: f64) -> Result<()> {
         // Update controller input if enabled
         if let Some(ref mut controller) = self.controller {
             controller.update()
