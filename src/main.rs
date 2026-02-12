@@ -326,7 +326,7 @@ impl Runtime {
     }
 
     /// Run one control loop iteration
-    fn control_step(&mut self, actual_dt: f64) -> Result<()> {
+    fn control_step(&mut self) -> Result<()> {
         // Update controller input if enabled
         if let Some(ref mut controller) = self.controller {
             controller.update()
