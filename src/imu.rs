@@ -34,19 +34,29 @@ pub struct ImuController {
     /// This compensates for IMU mounting angle or calibration bias
     /// Determined by measuring gravity when robot is standing upright
     gravity_offset: [f64; 3],
+    /// Use projected gravity from quaternion (true) or raw accelerometer (false)
+    use_projected_gravity: bool,
 }
 
 impl ImuController {
     /// Create a new IMU controller with default settings
     /// Uses /dev/i2c-1 and alternative address (0x29)
+    /// use_projected_gravity: false = raw accelerometer, true = quaternion-based projected gravity
+    pub fn new_default_with_mode(use_projected_gravity: bool) -> Result<Self> {
+        Self::new("/dev/i2c-1", 0x29, use_projected_gravity)
+    }
+
+    /// Create a new IMU controller with default settings (raw accelerometer mode)
+    /// Uses /dev/i2c-1 and alternative address (0x29)
     pub fn new_default() -> Result<Self> {
-        Self::new("/dev/i2c-1", 0x29)
+        Self::new("/dev/i2c-1", 0x29, false)
     }
 
     /// Create a new IMU controller
     /// i2c_device: path to I2C device (e.g., "/dev/i2c-1")
     /// address: BNO055 I2C address (0x28 or 0x29)
-    pub fn new(i2c_device: &str, address: u8) -> Result<Self> {
+    /// use_projected_gravity: false = raw accelerometer, true = quaternion-based projected gravity
+    pub fn new(i2c_device: &str, address: u8, use_projected_gravity: bool) -> Result<Self> {
         let i2c = I2cdev::new(i2c_device)
             .context(format!("Failed to open I2C device: {}", i2c_device))?;
 
@@ -86,6 +96,7 @@ impl ImuController {
             imu,
             delay,
             gravity_offset: [0.0; 3],  // No offset by default
+            use_projected_gravity,
         };
 
         // Automatically load calibration if it exists
@@ -213,9 +224,10 @@ impl ImuController {
     }
 
     /// Read current IMU data
-    /// Returns gyroscope (rad/s) and normalized raw accelerometer reading (unit vector)
-    /// Raw accelerometer is read directly from BNO055 sensor (includes gravity + linear acceleration)
-    /// This matches what the policy was trained with in simulation
+    /// Returns gyroscope (rad/s) and normalized projected gravity (unit vector)
+    /// Projected gravity can come from either:
+    /// - Raw accelerometer (default): includes dynamic accelerations, impacts, vibrations
+    /// - Quaternion-based (--projected-gravity): clean gravity free from dynamic accelerations
     pub fn read(&mut self) -> Result<ImuData> {
         // Read gyroscope (hardware-remapped, in 1/16 deg/s)
         let gyro = self.imu.gyro_data()
@@ -229,44 +241,76 @@ impl ImuController {
             gyro.z as f64 * gyro_scale,
         ];
 
-        // Read raw accelerometer (hardware-remapped, in m/s²)
-        // This includes BOTH gravity and linear acceleration (like real IMU sensor)
-        let accel = self.imu.accel_data()
-            .map_err(|e| anyhow::anyhow!("Failed to read accelerometer: {:?}", e))?;
+        // Compute projected gravity based on mode
+        let proj_grav = if self.use_projected_gravity {
+            // Mode 1: Quaternion-based projected gravity (clean, no dynamic accelerations)
+            // Read quaternion from IMU's sensor fusion (NDOF mode)
+            let quat_mint = self.imu.quaternion()
+                .map_err(|e| anyhow::anyhow!("Failed to read quaternion: {:?}", e))?;
 
-        // Convert accelerometer to f64 (already in m/s²)
-        let accel_ms2 = [
-            accel.x as f64,
-            accel.y as f64,
-            accel.z as f64,
-        ];
+            // Convert mint::Quaternion to [w, x, y, z] array
+            let quat = [
+                quat_mint.s as f64,    // w (scalar part)
+                quat_mint.v.x as f64,  // x (vector part)
+                quat_mint.v.y as f64,  // y
+                quat_mint.v.z as f64,  // z
+            ];
 
-        // Normalize raw accelerometer reading
-        // Accelerometer measures normal force (pointing up when at rest)
-        // Negate to get gravity direction (pointing down)
-        let accel_negated = [
-            -accel_ms2[0],
-            -accel_ms2[1],
-            -accel_ms2[2],
-        ];
+            // Compute projected gravity by rotating world-frame gravity into body frame
+            // World gravity: [0, 0, -9.81] pointing downward
+            let world_gravity = [0.0, 0.0, -9.81];
+            let proj_grav_ms2 = Self::quat_rotate_vec(quat, world_gravity);
 
-        // Normalize to unit vector
-        let mag = (accel_negated[0].powi(2) + accel_negated[1].powi(2) + accel_negated[2].powi(2)).sqrt();
-        let accel_normalized = if mag > 0.1 {
-            [
-                accel_negated[0] / mag,
-                accel_negated[1] / mag,
-                accel_negated[2] / mag,
-            ]
+            // Normalize to unit vector
+            let mag = (proj_grav_ms2[0].powi(2) + proj_grav_ms2[1].powi(2) + proj_grav_ms2[2].powi(2)).sqrt();
+            if mag > 0.1 {
+                [
+                    proj_grav_ms2[0] / mag,
+                    proj_grav_ms2[1] / mag,
+                    proj_grav_ms2[2] / mag,
+                ]
+            } else {
+                [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
+            }
         } else {
-            [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
+            // Mode 2: Raw accelerometer (default, includes dynamic accelerations)
+            // Read raw accelerometer (hardware-remapped, in m/s²)
+            let accel = self.imu.accel_data()
+                .map_err(|e| anyhow::anyhow!("Failed to read accelerometer: {:?}", e))?;
+
+            // Convert accelerometer to f64 (already in m/s²)
+            let accel_ms2 = [
+                accel.x as f64,
+                accel.y as f64,
+                accel.z as f64,
+            ];
+
+            // Accelerometer measures normal force (pointing up when at rest)
+            // Negate to get gravity direction (pointing down)
+            let accel_negated = [
+                -accel_ms2[0],
+                -accel_ms2[1],
+                -accel_ms2[2],
+            ];
+
+            // Normalize to unit vector
+            let mag = (accel_negated[0].powi(2) + accel_negated[1].powi(2) + accel_negated[2].powi(2)).sqrt();
+            if mag > 0.1 {
+                [
+                    accel_negated[0] / mag,
+                    accel_negated[1] / mag,
+                    accel_negated[2] / mag,
+                ]
+            } else {
+                [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
+            }
         };
 
         // Apply calibration offset (in unit vector space)
         let accel_corrected = [
-            accel_normalized[0] - self.gravity_offset[0],
-            accel_normalized[1] - self.gravity_offset[1],
-            accel_normalized[2] - self.gravity_offset[2],
+            proj_grav[0] - self.gravity_offset[0],
+            proj_grav[1] - self.gravity_offset[1],
+            proj_grav[2] - self.gravity_offset[2],
         ];
 
         // Renormalize after offset
