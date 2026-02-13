@@ -88,9 +88,9 @@ impl ImuController {
         imu.set_axis_sign(BNO055AxisSign::Y_NEGATIVE)
             .map_err(|e| anyhow::anyhow!("Failed to set axis sign: {:?}", e))?;
 
-        // Set to NDOF mode
-        imu.set_mode(bno055::BNO055OperationMode::NDOF, &mut delay)
-            .map_err(|e| anyhow::anyhow!("Failed to set NDOF mode: {:?}", e))?;
+        // Set to IMU mode (6-axis fusion: accelerometer + gyroscope, no magnetometer)
+        imu.set_mode(bno055::BNO055OperationMode::IMU, &mut delay)
+            .map_err(|e| anyhow::anyhow!("Failed to set IMU mode: {:?}", e))?;
 
         let mut controller = Self {
             imu,
@@ -223,6 +223,31 @@ impl ImuController {
         ]
     }
 
+    /// Rotate a vector by the inverse of a quaternion
+    /// Quaternion format: [w, x, y, z] (scalar-first convention)
+    /// This is used to transform from world frame to body frame
+    /// Uses the formula: result = vec - w * t + xyz × t, where t = xyz × vec * 2
+    fn quat_rotate_vec_inverse(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
+        let [w, qx, qy, qz] = quat;
+        let [vx, vy, vz] = vec;
+
+        // t = xyz × vec * 2
+        let tx = (qy * vz - qz * vy) * 2.0;
+        let ty = (qz * vx - qx * vz) * 2.0;
+        let tz = (qx * vy - qy * vx) * 2.0;
+
+        // result = vec - w * t + xyz × t
+        let cx = qy * tz - qz * ty;
+        let cy = qz * tx - qx * tz;
+        let cz = qx * ty - qy * tx;
+
+        [
+            vx - w * tx + cx,
+            vy - w * ty + cy,
+            vz - w * tz + cz,
+        ]
+    }
+
     /// Read current IMU data
     /// Returns gyroscope (rad/s) and normalized projected gravity (unit vector)
     /// Projected gravity can come from either:
@@ -244,7 +269,7 @@ impl ImuController {
         // Compute projected gravity based on mode
         let proj_grav = if self.use_projected_gravity {
             // Mode 1: Quaternion-based projected gravity (clean, no dynamic accelerations)
-            // Read quaternion from IMU's sensor fusion (NDOF mode)
+            // Read quaternion from IMU's sensor fusion (IMU mode)
             let quat_mint = self.imu.quaternion()
                 .map_err(|e| anyhow::anyhow!("Failed to read quaternion: {:?}", e))?;
 
@@ -257,17 +282,18 @@ impl ImuController {
             ];
 
             // Compute projected gravity by rotating world-frame gravity into body frame
-            // World gravity: [0, 0, -9.81] pointing downward
-            let world_gravity = [0.0, 0.0, -9.81];
-            let proj_grav_ms2 = Self::quat_rotate_vec(quat, world_gravity);
+            // World gravity: [0, 0, -1.0] unit vector pointing downward
+            // Use inverse rotation to transform from world frame to body frame
+            let world_gravity = [0.0, 0.0, -1.0];
+            let proj_grav_unit = Self::quat_rotate_vec_inverse(quat, world_gravity);
 
-            // Normalize to unit vector
-            let mag = (proj_grav_ms2[0].powi(2) + proj_grav_ms2[1].powi(2) + proj_grav_ms2[2].powi(2)).sqrt();
+            // Already a unit vector (or very close), but normalize to be safe
+            let mag = (proj_grav_unit[0].powi(2) + proj_grav_unit[1].powi(2) + proj_grav_unit[2].powi(2)).sqrt();
             if mag > 0.1 {
                 [
-                    proj_grav_ms2[0] / mag,
-                    proj_grav_ms2[1] / mag,
-                    proj_grav_ms2[2] / mag,
+                    proj_grav_unit[0] / mag,
+                    proj_grav_unit[1] / mag,
+                    proj_grav_unit[2] / mag,
                 ]
             } else {
                 [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small

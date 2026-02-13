@@ -104,7 +104,7 @@ fn read_imu_detailed(imu: &mut ImuController) -> Result<([f64; 3], [f64; 3], [f6
     thread::sleep(Duration::from_micros(100));
     i2c.read(&mut accel_buffer)?;
 
-    // BNO055 accelerometer scale: 1 LSB = 1 m/s² (in m/s² mode, which is default in NDOF)
+    // BNO055 accelerometer scale: 1 LSB = 1 m/s² (in m/s² mode, which is default in IMU)
     let accel_raw = [
         i16::from_le_bytes([accel_buffer[0], accel_buffer[1]]) as f64 / 100.0,  // 1 LSB = 0.01 m/s²
         i16::from_le_bytes([accel_buffer[2], accel_buffer[3]]) as f64 / 100.0,

@@ -52,14 +52,14 @@ fn main() -> Result<()> {
 
     println!("✓ Axis remapping configured");
 
-    // Set to NDOF mode for calibration (enables all sensors and fusion)
-    println!("Setting NDOF mode for calibration...");
-    imu.set_mode(bno055::BNO055OperationMode::NDOF, &mut delay)
-        .map_err(|e| anyhow::anyhow!("Failed to set NDOF mode: {:?}", e))?;
+    // Set to IMU mode for calibration (6-axis fusion: accelerometer + gyroscope)
+    println!("Setting IMU mode for calibration...");
+    imu.set_mode(bno055::BNO055OperationMode::IMU, &mut delay)
+        .map_err(|e| anyhow::anyhow!("Failed to set IMU mode: {:?}", e))?;
 
-    println!("✓ NDOF mode enabled");
+    println!("✓ IMU mode enabled");
 
-    // Give the sensor a moment to stabilize in NDOF mode
+    // Give the sensor a moment to stabilize in IMU mode
     thread::sleep(Duration::from_millis(500));
 
     // Verify sensors are working

@@ -62,7 +62,9 @@ impl Observation {
             idx += 1;
         }
 
-        // Raw accelerometer (3) - includes gravity + linear acceleration + dynamics
+        // Projected gravity OR raw accelerometer (3) - depends on --projected-gravity flag
+        // With --projected-gravity: pure gravity direction (quaternion-based, no dynamics)
+        // Without flag: raw accelerometer (includes gravity + linear acceleration + dynamics)
         for i in 0..3 {
             data[idx] = imu.accel[i] as f32;
             idx += 1;

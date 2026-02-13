@@ -43,9 +43,9 @@ fn main() -> Result<()> {
     println!("✓ Axis remapping configured: X=-Sensor_Y, Y=-Sensor_X, Z=Sensor_Z");
     println!();
 
-    // Set to NDOF mode
-    imu.set_mode(bno055::BNO055OperationMode::NDOF, &mut delay).map_err(|e| anyhow::anyhow!("{:?}", e))?;
-    println!("✓ Set to NDOF mode");
+    // Set to IMU mode (6-axis fusion: accelerometer + gyroscope, no magnetometer)
+    imu.set_mode(bno055::BNO055OperationMode::IMU, &mut delay).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+    println!("✓ Set to IMU mode");
     println!();
 
     println!("Waiting for calibration...");
