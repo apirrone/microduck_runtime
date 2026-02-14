@@ -28,7 +28,7 @@ struct TimestampedObservation {
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Serial port for motor communication
-    #[arg(short, long, default_value = "/dev/ttyUSB0")]
+    #[arg(short, long, default_value = "/dev/ttyAMA0")]
     port: String,
 
     /// Motor communication baudrate
@@ -52,7 +52,7 @@ struct Args {
     standing: Option<String>,
 
     /// Position P gain for motors
-    #[arg(long, default_value_t = 400)]
+    #[arg(long, default_value_t = 200)]
     kp: u16,
 
     /// Position I gain for motors
@@ -80,10 +80,11 @@ struct Args {
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     gravity_offset_z: f64,
 
-    /// Use projected gravity from quaternion instead of raw accelerometer
-    /// When enabled, uses sensor fusion to compute clean gravity free from dynamic accelerations
+    /// Use raw accelerometer instead of projected gravity (default: use projected gravity)
+    /// By default, sensor fusion computes clean gravity free from dynamic accelerations.
+    /// This flag disables that and uses raw accelerometer readings instead.
     #[arg(long)]
-    projected_gravity: bool,
+    raw_accelerometer: bool,
 
     /// Optional CSV log file to save observations and actions
     #[arg(long)]
@@ -172,9 +173,10 @@ impl Runtime {
         println!("✓ Motor controller initialized on {} at {} baud", args.port, args.baudrate);
 
         // Initialize IMU controller (BNO055 on I2C)
-        let mut imu_controller = ImuController::new_default_with_mode(args.projected_gravity)
+        let use_projected_gravity = !args.raw_accelerometer;
+        let mut imu_controller = ImuController::new_default_with_mode(use_projected_gravity)
             .context("Failed to initialize IMU controller (BNO055 on /dev/i2c-1)")?;
-        if args.projected_gravity {
+        if use_projected_gravity {
             println!("✓ IMU controller initialized (BNO055) - using projected gravity from quaternion");
         } else {
             println!("✓ IMU controller initialized (BNO055) - using raw accelerometer");
