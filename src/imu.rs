@@ -43,6 +43,8 @@ pub struct ImuController {
     max_angular_accel: f64,
     /// Counter for rejected gyro samples
     rejected_samples: u64,
+    /// Whether we've received the first gyro reading (to skip outlier detection on first sample)
+    first_gyro_read: bool,
 }
 
 impl ImuController {
@@ -113,6 +115,7 @@ impl ImuController {
             prev_gyro: [0.0; 3],
             max_angular_accel,
             rejected_samples: 0,
+            first_gyro_read: true,
         };
 
         // Automatically load calibration if it exists
@@ -295,7 +298,7 @@ impl ImuController {
 
         // Outlier detection: reject spikes that exceed maximum angular acceleration
         // This prevents sensor glitches and I2C errors from corrupting the observation
-        if self.max_angular_accel > 0.0 {
+        if self.max_angular_accel > 0.0 && !self.first_gyro_read {
             // Assume 50Hz sampling rate (can be adjusted if needed)
             let dt = 0.02; // 20ms = 50Hz
             let max_delta = self.max_angular_accel * dt;
@@ -318,8 +321,9 @@ impl ImuController {
                 self.prev_gyro = gyro_rad_s;
             }
         } else {
-            // Outlier detection disabled, just update previous gyro
+            // First reading or outlier detection disabled - accept reading
             self.prev_gyro = gyro_rad_s;
+            self.first_gyro_read = false;
         }
 
         // Compute projected gravity based on mode
