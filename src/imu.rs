@@ -36,6 +36,13 @@ pub struct ImuController {
     gravity_offset: [f64; 3],
     /// Use projected gravity from quaternion (true) or raw accelerometer (false)
     use_projected_gravity: bool,
+    /// Previous valid gyroscope reading for outlier detection
+    prev_gyro: [f64; 3],
+    /// Maximum allowed angular acceleration (rad/s²) for outlier detection
+    /// Set to 0.0 to disable outlier detection
+    max_angular_accel: f64,
+    /// Counter for rejected gyro samples
+    rejected_samples: u64,
 }
 
 impl ImuController {
@@ -43,20 +50,26 @@ impl ImuController {
     /// Uses /dev/i2c-1 and alternative address (0x29)
     /// use_projected_gravity: false = raw accelerometer, true = quaternion-based projected gravity
     pub fn new_default_with_mode(use_projected_gravity: bool) -> Result<Self> {
-        Self::new("/dev/i2c-1", 0x29, use_projected_gravity)
+        Self::new("/dev/i2c-1", 0x29, use_projected_gravity, 100.0)
+    }
+
+    /// Create a new IMU controller with custom outlier detection threshold
+    pub fn new_default_with_outlier_detection(use_projected_gravity: bool, max_angular_accel: f64) -> Result<Self> {
+        Self::new("/dev/i2c-1", 0x29, use_projected_gravity, max_angular_accel)
     }
 
     /// Create a new IMU controller with default settings (raw accelerometer mode)
     /// Uses /dev/i2c-1 and alternative address (0x29)
     pub fn new_default() -> Result<Self> {
-        Self::new("/dev/i2c-1", 0x29, false)
+        Self::new("/dev/i2c-1", 0x29, false, 100.0)
     }
 
     /// Create a new IMU controller
     /// i2c_device: path to I2C device (e.g., "/dev/i2c-1")
     /// address: BNO055 I2C address (0x28 or 0x29)
     /// use_projected_gravity: false = raw accelerometer, true = quaternion-based projected gravity
-    pub fn new(i2c_device: &str, address: u8, use_projected_gravity: bool) -> Result<Self> {
+    /// max_angular_accel: maximum allowed angular acceleration in rad/s² (0.0 to disable outlier detection)
+    pub fn new(i2c_device: &str, address: u8, use_projected_gravity: bool, max_angular_accel: f64) -> Result<Self> {
         let i2c = I2cdev::new(i2c_device)
             .context(format!("Failed to open I2C device: {}", i2c_device))?;
 
@@ -97,6 +110,9 @@ impl ImuController {
             delay,
             gravity_offset: [0.0; 3],  // No offset by default
             use_projected_gravity,
+            prev_gyro: [0.0; 3],
+            max_angular_accel,
+            rejected_samples: 0,
         };
 
         // Automatically load calibration if it exists
@@ -200,6 +216,17 @@ impl ImuController {
         self.gravity_offset
     }
 
+    /// Get the number of rejected gyro samples due to outlier detection
+    pub fn get_rejected_samples(&self) -> u64 {
+        self.rejected_samples
+    }
+
+    /// Set maximum angular acceleration threshold for outlier detection
+    /// Set to 0.0 to disable outlier detection
+    pub fn set_max_angular_accel(&mut self, max_accel: f64) {
+        self.max_angular_accel = max_accel;
+    }
+
     /// Rotate a vector by a quaternion
     /// Quaternion format: [w, x, y, z] (scalar-first convention)
     fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
@@ -260,11 +287,40 @@ impl ImuController {
 
         // Convert gyroscope to rad/s (from 1/16 deg/s)
         let gyro_scale = std::f64::consts::PI / 180.0;
-        let gyro_rad_s = [
+        let mut gyro_rad_s = [
             gyro.x as f64 * gyro_scale,
             gyro.y as f64 * gyro_scale,
             gyro.z as f64 * gyro_scale,
         ];
+
+        // Outlier detection: reject spikes that exceed maximum angular acceleration
+        // This prevents sensor glitches and I2C errors from corrupting the observation
+        if self.max_angular_accel > 0.0 {
+            // Assume 50Hz sampling rate (can be adjusted if needed)
+            let dt = 0.02; // 20ms = 50Hz
+            let max_delta = self.max_angular_accel * dt;
+
+            let mut is_outlier = false;
+            for i in 0..3 {
+                let delta = (gyro_rad_s[i] - self.prev_gyro[i]).abs();
+                if delta > max_delta {
+                    is_outlier = true;
+                    break;
+                }
+            }
+
+            if is_outlier {
+                // Reject this reading and use previous valid reading
+                gyro_rad_s = self.prev_gyro;
+                self.rejected_samples += 1;
+            } else {
+                // Valid reading, update previous gyro
+                self.prev_gyro = gyro_rad_s;
+            }
+        } else {
+            // Outlier detection disabled, just update previous gyro
+            self.prev_gyro = gyro_rad_s;
+        }
 
         // Compute projected gravity based on mode
         let proj_grav = if self.use_projected_gravity {

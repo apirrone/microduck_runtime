@@ -86,6 +86,16 @@ struct Args {
     #[arg(long)]
     raw_accelerometer: bool,
 
+    /// Maximum angular acceleration threshold for gyro outlier detection (rad/s²)
+    /// Readings exceeding this threshold will be rejected and replaced with previous valid reading.
+    /// Set to 0 to disable outlier detection. Default: 100 rad/s² (at 50Hz = 2 rad/s max change per step)
+    #[arg(long, default_value_t = 100.0)]
+    max_angular_accel: f64,
+
+    /// Disable gyroscope outlier detection (allow all readings through)
+    #[arg(long)]
+    no_gyro_outlier_filter: bool,
+
     /// Optional CSV log file to save observations and actions
     #[arg(long)]
     log_file: Option<String>,
@@ -174,12 +184,22 @@ impl Runtime {
 
         // Initialize IMU controller (BNO055 on I2C)
         let use_projected_gravity = !args.raw_accelerometer;
-        let mut imu_controller = ImuController::new_default_with_mode(use_projected_gravity)
+        let max_angular_accel = if args.no_gyro_outlier_filter {
+            0.0  // Disable outlier detection
+        } else {
+            args.max_angular_accel
+        };
+        let mut imu_controller = ImuController::new_default_with_outlier_detection(use_projected_gravity, max_angular_accel)
             .context("Failed to initialize IMU controller (BNO055 on /dev/i2c-1)")?;
         if use_projected_gravity {
             println!("✓ IMU controller initialized (BNO055) - using projected gravity from quaternion");
         } else {
             println!("✓ IMU controller initialized (BNO055) - using raw accelerometer");
+        }
+        if max_angular_accel > 0.0 {
+            println!("✓ Gyro outlier detection enabled (max angular accel: {:.1} rad/s²)", max_angular_accel);
+        } else {
+            println!("⚠  Gyro outlier detection disabled");
         }
 
         // Set gravity offset if specified
@@ -628,6 +648,14 @@ impl Runtime {
         if let Some(ref mut file) = self.log_file {
             file.flush()?;
             println!("✓ Log file flushed and closed");
+        }
+
+        // Report gyro outlier statistics
+        let rejected = self.imu_controller.get_rejected_samples();
+        if rejected > 0 {
+            let rejection_rate = rejected as f64 / self.step_counter as f64 * 100.0;
+            println!("⚠  Gyro outliers rejected: {} samples ({:.2}% of {} total)",
+                     rejected, rejection_rate, self.step_counter);
         }
 
         // Note: We do NOT disable motor torque on shutdown
