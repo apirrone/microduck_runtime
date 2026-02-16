@@ -123,7 +123,7 @@ struct Args {
     controller: bool,
 
     /// Maximum linear velocity for controller input (m/s)
-    #[arg(long, default_value_t = 0.4)]
+    #[arg(long, default_value_t = 0.3)]
     max_linear_vel: f64,
 
     /// Maximum angular velocity for controller input (rad/s)
