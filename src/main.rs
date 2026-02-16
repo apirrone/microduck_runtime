@@ -160,6 +160,7 @@ struct Runtime {
     max_linear_vel: f64,
     max_angular_vel: f64,
     controller_deadzone: f32,
+    start_button_prev_state: bool,  // Track Start button state for edge detection
 }
 
 impl Runtime {
@@ -315,6 +316,7 @@ impl Runtime {
             max_linear_vel: args.max_linear_vel,
             max_angular_vel: args.max_angular_vel,
             controller_deadzone: args.controller_deadzone,
+            start_button_prev_state: false,
         })
     }
 
@@ -352,11 +354,24 @@ impl Runtime {
 
             // Map controller to velocity commands:
             // - Left stick Y (positive) → vel_x (positive)
-            // - Left stick X (positive) → vel_y (positive)
-            // - Right stick X (positive) → vel_z (positive)
+            // - Left stick X (positive) → vel_y (negative, inverted)
+            // - Right stick X (positive) → vel_z (negative, inverted, scaled to 1.5x)
             self.command[0] = left_y as f64 * self.max_linear_vel;
-            self.command[1] = left_x as f64 * self.max_linear_vel;
-            self.command[2] = right_x as f64 * self.max_angular_vel;
+            self.command[1] = -left_x as f64 * self.max_linear_vel;
+            self.command[2] = -right_x as f64 * 1.5 * self.max_angular_vel;
+
+            // Handle Start button to toggle policy inference
+            let start_pressed = controller.is_button_pressed("Start");
+            if start_pressed && !self.start_button_prev_state {
+                // Button was just pressed (rising edge)
+                self.policy_enabled = !self.policy_enabled;
+                if self.policy_enabled {
+                    println!("▶ Policy inference ENABLED");
+                } else {
+                    println!("⏸ Policy inference DISABLED - returning to default pose");
+                }
+            }
+            self.start_button_prev_state = start_pressed;
         }
 
         // Read IMU data
