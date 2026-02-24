@@ -138,6 +138,14 @@ if [ ! -f "test_controller" ]; then
     echo -e "${YELLOW}Warning: test_controller binary not found in archive.${NC}"
 fi
 
+if [ ! -f "init" ]; then
+    echo -e "${YELLOW}Warning: init binary not found in archive.${NC}"
+fi
+
+if [ ! -f "em" ]; then
+    echo -e "${YELLOW}Warning: em binary not found in archive.${NC}"
+fi
+
 # Make binaries executable
 chmod +x "$BINARY_NAME"
 [ -f "test_imu" ] && chmod +x "test_imu"
@@ -153,6 +161,8 @@ chmod +x "$BINARY_NAME"
 [ -f "test_imu_fusion_latency" ] && chmod +x "test_imu_fusion_latency"
 [ -f "test_motor_latency" ] && chmod +x "test_motor_latency"
 [ -f "test_controller" ] && chmod +x "test_controller"
+[ -f "init" ] && chmod +x "init"
+[ -f "em" ] && chmod +x "em"
 
 # Install ONNX Runtime library
 ONNX_LIB_DIR="/usr/local/lib"
@@ -186,6 +196,8 @@ if [ -w "$INSTALL_DIR" ]; then
     [ -f "test_imu_fusion_latency" ] && mv "test_imu_fusion_latency" "$INSTALL_DIR/"
     [ -f "test_motor_latency" ] && mv "test_motor_latency" "$INSTALL_DIR/"
     [ -f "test_controller" ] && mv "test_controller" "$INSTALL_DIR/"
+    [ -f "init" ] && mv "init" "$INSTALL_DIR/"
+    [ -f "em" ] && mv "em" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
     sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
@@ -202,6 +214,8 @@ else
     [ -f "test_imu_fusion_latency" ] && sudo mv "test_imu_fusion_latency" "$INSTALL_DIR/"
     [ -f "test_motor_latency" ] && sudo mv "test_motor_latency" "$INSTALL_DIR/"
     [ -f "test_controller" ] && sudo mv "test_controller" "$INSTALL_DIR/"
+    [ -f "init" ] && sudo mv "init" "$INSTALL_DIR/"
+    [ -f "em" ] && sudo mv "em" "$INSTALL_DIR/"
 fi
 
 # Cleanup
@@ -256,6 +270,12 @@ if command -v $BINARY_NAME &> /dev/null; then
     if command -v test_controller &> /dev/null; then
         echo "  - test_controller (Xbox controller input test)"
     fi
+    if command -v init &> /dev/null; then
+        echo "  - init (enable torque and move to default pose)"
+    fi
+    if command -v em &> /dev/null; then
+        echo "  - em (emergency stop: disable motor torque)"
+    fi
     echo ""
     echo "Usage:"
     echo "  calibrate_imu               # IMPORTANT: Calibrate IMU first!"
@@ -272,7 +292,9 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo "  test_imu_latency            # Measure IMU response latency (raw sensors)"
     echo "  test_imu_fusion_latency     # Measure fusion latency (projected gravity)"
     echo "  test_motor_latency          # Measure motor command-to-movement latency"
-    echo "  test_controller             # Test Xbox controller input"
+    echo "  test_controller             # Test Xbox controller input
+  init                        # Enable torque and move to default pose
+  em                          # Emergency stop: disable motor torque"
     echo ""
     echo "Example:"
     echo "  $BINARY_NAME --dummy --port /dev/ttyAMA0 --freq 50 --kp 400"

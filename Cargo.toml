@@ -63,6 +63,14 @@ path = "src/bin/test_motor_latency.rs"
 name = "test_controller"
 path = "src/bin/test_controller.rs"
 
+[[bin]]
+name = "init"
+path = "src/bin/init.rs"
+
+[[bin]]
+name = "em"
+path = "src/bin/em.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
