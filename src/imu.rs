@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use linux_embedded_hal::{Delay, I2cdev};
-use bno055::{Bno055, AxisRemap, BNO055AxisConfig, BNO055AxisSign, BNO055Calibration};
+use bno055::{Bno055, BNO055AxisSign, BNO055Calibration};
 use std::fs;
 use std::path::PathBuf;
 
@@ -73,19 +73,12 @@ impl ImuController {
             .map_err(|e| anyhow::anyhow!("Failed to initialize BNO055: {:?}", e))?;
 
         // Configure hardware axis remapping
-        // IMU mounting: X+ right, Y+ forward, Z+ up
+        // IMU mounting: 90° clockwise yaw relative to previous orientation (viewed from above)
+        // Previous: Sensor X+ → right,     Sensor Y+ → forward
+        // New:      Sensor X+ → backward,  Sensor Y+ → right
         // Robot frame: X+ forward, Y+ left, Z+ up
-        // Mapping: Robot = [+Sensor_Y, -Sensor_X, +Sensor_Z]
-        let remap = AxisRemap::builder()
-            .swap_x_with(BNO055AxisConfig::AXIS_AS_Y)  // Swap X and Y axes
-            .build()
-            .map_err(|_| anyhow::anyhow!("Failed to build axis remap"))?;
-
-        imu.set_axis_remap(remap)
-            .map_err(|e| anyhow::anyhow!("Failed to set axis remap: {:?}", e))?;
-
-        // Flip only Y axis sign (sensor's right becomes robot's left)
-        imu.set_axis_sign(BNO055AxisSign::Y_NEGATIVE)
+        // Mapping: Robot = [-Sensor_X, -Sensor_Y, +Sensor_Z]
+        imu.set_axis_sign(BNO055AxisSign::X_NEGATIVE | BNO055AxisSign::Y_NEGATIVE)
             .map_err(|e| anyhow::anyhow!("Failed to set axis sign: {:?}", e))?;
 
         // Set to IMU mode (6-axis fusion: accelerometer + gyroscope, no magnetometer)
