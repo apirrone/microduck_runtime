@@ -161,6 +161,10 @@ struct Runtime {
     max_angular_vel: f64,
     controller_deadzone: f32,
     start_button_prev_state: bool,  // Track Start button state for edge detection
+    head_mode: bool,  // Head control mode (Y button)
+    head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
+    head_max: f64,  // Max head offset in radians
+    y_button_prev_state: bool,  // Track Y button state for edge detection
 }
 
 impl Runtime {
@@ -317,6 +321,10 @@ impl Runtime {
             max_angular_vel: args.max_angular_vel,
             controller_deadzone: args.controller_deadzone,
             start_button_prev_state: false,
+            head_mode: false,
+            head_offsets: [0.0; 4],
+            head_max: 0.3,
+            y_button_prev_state: false,
         })
     }
 
@@ -347,18 +355,43 @@ impl Runtime {
 
             let state = controller.get_state();
 
-            // Apply deadzone to stick inputs
+            // Apply deadzone to all stick inputs
             let left_y = Controller::apply_deadzone(state.left_stick_y, self.controller_deadzone);
             let left_x = Controller::apply_deadzone(state.left_stick_x, self.controller_deadzone);
             let right_x = Controller::apply_deadzone(state.right_stick_x, self.controller_deadzone);
+            let right_y = Controller::apply_deadzone(state.right_stick_y, self.controller_deadzone);
 
-            // Map controller to velocity commands:
-            // - Left stick Y (positive) → vel_x (positive)
-            // - Left stick X (positive) → vel_y (negative, inverted)
-            // - Right stick X (positive) → vel_z (negative, inverted, scaled to 1.5x)
-            self.command[0] = left_y as f64 * self.max_linear_vel;
-            self.command[1] = -left_x as f64 * self.max_linear_vel;
-            self.command[2] = -right_x as f64 * 1.5 * self.max_angular_vel;
+            // Handle Y button (North) to toggle head mode
+            let y_pressed = controller.is_button_pressed("North");
+            if y_pressed && !self.y_button_prev_state {
+                self.head_mode = !self.head_mode;
+                if self.head_mode {
+                    self.command = [0.0; 3];
+                    println!("HEAD mode: ON (L-stick: head_yaw/head_pitch, R-stick: head_roll/neck_pitch)");
+                } else {
+                    self.head_offsets = [0.0; 4];
+                    println!("HEAD mode: OFF");
+                }
+            }
+            self.y_button_prev_state = y_pressed;
+
+            if self.head_mode {
+                // Head mode: joysticks control neck/head joint offsets
+                // [neck_pitch, head_pitch, head_yaw, head_roll] → motor indices [5, 6, 7, 8]
+                self.head_offsets[2] = left_x as f64 * self.head_max;   // head_yaw  (L stick left/right)
+                self.head_offsets[1] = left_y as f64 * self.head_max;   // head_pitch (L stick up/down)
+                self.head_offsets[3] = right_x as f64 * self.head_max;  // head_roll  (R stick left/right)
+                self.head_offsets[0] = right_y as f64 * self.head_max;  // neck_pitch (R stick up/down)
+                self.command = [0.0; 3];
+            } else {
+                // Normal mode: joysticks control velocity commands
+                // - Left stick Y (positive) → vel_x (positive)
+                // - Left stick X (positive) → vel_y (negative, inverted)
+                // - Right stick X (positive) → vel_z (negative, inverted, scaled to 1.5x)
+                self.command[0] = left_y as f64 * self.max_linear_vel;
+                self.command[1] = -left_x as f64 * self.max_linear_vel;
+                self.command[2] = -right_x as f64 * 1.5 * self.max_angular_vel;
+            }
 
             // Handle Start button to toggle policy inference
             let start_pressed = controller.is_button_pressed("Start");
@@ -430,6 +463,11 @@ impl Runtime {
         let mut motor_targets = [0.0f64; NUM_MOTORS];
         for i in 0..NUM_MOTORS {
             motor_targets[i] = DEFAULT_POSITION[i] + self.action_scale * action[i] as f64;
+        }
+
+        // Apply head offsets to neck/head joints (motor indices 5-8: neck_pitch, head_pitch, head_yaw, head_roll)
+        for i in 0..4 {
+            motor_targets[5 + i] += self.head_offsets[i];
         }
 
         // Get timestamp for both logging and recording
