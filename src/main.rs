@@ -133,6 +133,10 @@ struct Args {
     /// Controller deadzone (0.0-1.0)
     #[arg(long, default_value_t = 0.1)]
     controller_deadzone: f32,
+
+    /// Maximum head/neck joint offset in head mode (radians)
+    #[arg(long, default_value_t = 0.3)]
+    head_max: f64,
 }
 
 
@@ -323,7 +327,7 @@ impl Runtime {
             start_button_prev_state: false,
             head_mode: false,
             head_offsets: [0.0; 4],
-            head_max: 0.3,
+            head_max: args.head_max,
             y_button_prev_state: false,
         })
     }
