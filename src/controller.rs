@@ -123,12 +123,12 @@ impl Controller {
                 }
                 EventType::AxisChanged(axis, value, _) => {
                     match axis {
-                        Axis::LeftStickX => self.state.left_stick_x = value,
-                        Axis::LeftStickY => self.state.left_stick_y = value,
+                        Axis::LeftStickX => self.state.left_stick_y = value,
+                        Axis::LeftStickY => self.state.left_stick_x = value,
                         Axis::RightStickX => self.state.right_stick_x = value,
                         Axis::RightStickY => self.state.right_stick_y = value,
-                        Axis::LeftZ => self.state.left_trigger = (value + 1.0) / 2.0, // Map -1..1 to 0..1
-                        Axis::RightZ => self.state.right_trigger = (value + 1.0) / 2.0,
+                        Axis::LeftZ => self.state.right_stick_x = value,
+                        Axis::RightZ => self.state.right_stick_y = value,
                         Axis::DPadX => self.state.dpad_x = value,
                         Axis::DPadY => self.state.dpad_y = value,
                         _ => {}
