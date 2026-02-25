@@ -146,6 +146,10 @@ if [ ! -f "em" ]; then
     echo -e "${YELLOW}Warning: em binary not found in archive.${NC}"
 fi
 
+if [ ! -f "check_voltage" ]; then
+    echo -e "${YELLOW}Warning: check_voltage binary not found in archive.${NC}"
+fi
+
 # Make binaries executable
 chmod +x "$BINARY_NAME"
 [ -f "test_imu" ] && chmod +x "test_imu"
@@ -163,6 +167,7 @@ chmod +x "$BINARY_NAME"
 [ -f "test_controller" ] && chmod +x "test_controller"
 [ -f "init" ] && chmod +x "init"
 [ -f "em" ] && chmod +x "em"
+[ -f "check_voltage" ] && chmod +x "check_voltage"
 
 # Install ONNX Runtime library
 ONNX_LIB_DIR="/usr/local/lib"
@@ -198,6 +203,7 @@ if [ -w "$INSTALL_DIR" ]; then
     [ -f "test_controller" ] && mv "test_controller" "$INSTALL_DIR/"
     [ -f "init" ] && mv "init" "$INSTALL_DIR/"
     [ -f "em" ] && mv "em" "$INSTALL_DIR/"
+    [ -f "check_voltage" ] && mv "check_voltage" "$INSTALL_DIR/"
 else
     echo "Installing with sudo (requires password)..."
     sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
@@ -216,6 +222,7 @@ else
     [ -f "test_controller" ] && sudo mv "test_controller" "$INSTALL_DIR/"
     [ -f "init" ] && sudo mv "init" "$INSTALL_DIR/"
     [ -f "em" ] && sudo mv "em" "$INSTALL_DIR/"
+    [ -f "check_voltage" ] && sudo mv "check_voltage" "$INSTALL_DIR/"
 fi
 
 # Cleanup
@@ -276,6 +283,9 @@ if command -v $BINARY_NAME &> /dev/null; then
     if command -v em &> /dev/null; then
         echo "  - em (emergency stop: disable motor torque)"
     fi
+    if command -v check_voltage &> /dev/null; then
+        echo "  - check_voltage (read present input voltage for all motors)"
+    fi
     echo ""
     echo "Usage:"
     echo "  calibrate_imu               # IMPORTANT: Calibrate IMU first!"
@@ -294,7 +304,8 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo "  test_motor_latency          # Measure motor command-to-movement latency"
     echo "  test_controller             # Test Xbox controller input
   init                        # Enable torque and move to default pose
-  em                          # Emergency stop: disable motor torque"
+  em                          # Emergency stop: disable motor torque
+  check_voltage               # Read present input voltage for all motors"
     echo ""
     echo "Example:"
     echo "  $BINARY_NAME --dummy --port /dev/ttyAMA0 --freq 50 --kp 400"

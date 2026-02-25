@@ -205,6 +205,19 @@ impl MotorController {
         Ok((left_leg_current, right_leg_current))
     }
 
+    /// Read present input voltage for all motors (in Volts)
+    pub fn read_voltages(&mut self) -> Result<[f32; NUM_MOTORS]> {
+        let raw = self.controller
+            .sync_read_present_input_voltage(&MOTOR_IDS)
+            .map_err(|e| anyhow::anyhow!("Failed to read voltages: {}", e))?;
+
+        let mut voltages = [0.0f32; NUM_MOTORS];
+        for (i, &v) in raw.iter().enumerate() {
+            voltages[i] = v as f32 * 0.1;
+        }
+        Ok(voltages)
+    }
+
     /// Set PID gains for all motors
     pub fn set_pid_gains(&mut self, kp: u16, ki: u16, kd: u16) -> Result<()> {
         for &id in &MOTOR_IDS {

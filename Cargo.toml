@@ -71,6 +71,10 @@ path = "src/bin/init.rs"
 name = "em"
 path = "src/bin/em.rs"
 
+[[bin]]
+name = "check_voltage"
+path = "src/bin/check_voltage.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
