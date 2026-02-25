@@ -371,7 +371,7 @@ impl Runtime {
                 self.head_mode = !self.head_mode;
                 if self.head_mode {
                     self.command = [0.0; 3];
-                    println!("HEAD mode: ON (L-stick: head_yaw/head_pitch, R-stick: head_roll/neck_pitch)");
+                    println!("HEAD mode: ON (L-stick: pitch/yaw, R-stick: roll/neck_pitch)");
                 } else {
                     self.head_offsets = [0.0; 4];
                     println!("HEAD mode: OFF");
@@ -382,19 +382,19 @@ impl Runtime {
             if self.head_mode {
                 // Head mode: joysticks control neck/head joint offsets
                 // [neck_pitch, head_pitch, head_yaw, head_roll] → motor indices [5, 6, 7, 8]
-                self.head_offsets[2] = left_x as f64 * self.head_max;   // head_yaw  (L stick left/right)
-                self.head_offsets[1] = left_y as f64 * self.head_max;   // head_pitch (L stick up/down)
-                self.head_offsets[3] = right_x as f64 * self.head_max;  // head_roll  (R stick left/right)
-                self.head_offsets[0] = right_y as f64 * self.head_max;  // neck_pitch (R stick up/down)
+                self.head_offsets[1] = left_x as f64 * self.head_max;   // head_pitch (L stick up/down)
+                self.head_offsets[2] = left_y as f64 * self.head_max;   // head_yaw   (L stick left/right)
+                self.head_offsets[3] = right_y as f64 * self.head_max;  // head_roll  (R stick left/right)
+                self.head_offsets[0] = right_x as f64 * self.head_max;  // neck_pitch (R stick up/down)
                 self.command = [0.0; 3];
             } else {
                 // Normal mode: joysticks control velocity commands
-                // - Left stick Y (positive) → vel_x (positive)
-                // - Left stick X (positive) → vel_y (negative, inverted)
-                // - Right stick X (positive) → vel_z (negative, inverted, scaled to 1.5x)
-                self.command[0] = left_y as f64 * self.max_linear_vel;
-                self.command[1] = -left_x as f64 * self.max_linear_vel;
-                self.command[2] = -right_x as f64 * 1.5 * self.max_angular_vel;
+                // - Left stick X (up/down) → vel_x forward/backward
+                // - Left stick Y (left/right) → vel_y strafe
+                // - Right stick Y (left/right) → vel_z turn
+                self.command[0] = left_x as f64 * self.max_linear_vel;
+                self.command[1] = -left_y as f64 * self.max_linear_vel;
+                self.command[2] = -right_y as f64 * 1.5 * self.max_angular_vel;
             }
 
             // Handle Start button to toggle policy inference
