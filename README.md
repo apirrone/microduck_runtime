@@ -29,7 +29,7 @@ curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/inst
 ## Recommended run command
 
 ```bash
-microduck_runtime -m output.onnx --action-scale 0.5 --head-max 1.5 --max-linear-vel 0.5 --max-angular-vel 4 --gravity-offset-x 0.1 -c
+microduck_runtime -m ~/microduck/policies/walking.onnx --action-scale 0.5 --head-max 1.5 --max-linear-vel 0.5 --max-angular-vel 4 --gravity-offset-x 0.1 -c
 ```
 
 ## Controller

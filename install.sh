@@ -99,6 +99,14 @@ for bin in $OPTIONAL_BINS; do
     [ -f "$bin" ] && chmod +x "$bin"
 done
 
+# Install policies
+if [ -d "policies" ]; then
+    POLICIES_DIR="$HOME/microduck/policies"
+    mkdir -p "$POLICIES_DIR"
+    cp policies/* "$POLICIES_DIR/"
+    echo -e "${GREEN}✓ Policies installed to $POLICIES_DIR${NC}"
+fi
+
 # Install ONNX Runtime library
 ONNX_LIB_DIR="/usr/local/lib"
 if ls libonnxruntime.so* 1> /dev/null 2>&1; then

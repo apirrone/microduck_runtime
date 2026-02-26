@@ -60,22 +60,17 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/test_imu2 dist/
           cp target/aarch64-unknown-linux-gnu/release/test_imu3 dist/
           cp target/aarch64-unknown-linux-gnu/release/test_i2c_raw dist/
-          cp target/aarch64-unknown-linux-gnu/release/debug_imu dist/
-          cp target/aarch64-unknown-linux-gnu/release/debug_imu_observations dist/
-          cp target/aarch64-unknown-linux-gnu/release/debug_motor_speed dist/
-          cp target/aarch64-unknown-linux-gnu/release/debug_policy_io dist/
           cp target/aarch64-unknown-linux-gnu/release/calibrate_imu dist/
-          cp target/aarch64-unknown-linux-gnu/release/test_imu_latency dist/
-          cp target/aarch64-unknown-linux-gnu/release/test_imu_fusion_latency dist/
-          cp target/aarch64-unknown-linux-gnu/release/test_motor_latency dist/
           cp target/aarch64-unknown-linux-gnu/release/test_controller dist/
           cp target/aarch64-unknown-linux-gnu/release/init dist/
           cp target/aarch64-unknown-linux-gnu/release/em dist/
           cp target/aarch64-unknown-linux-gnu/release/check_voltage dist/
+          # Copy policies
+          cp -r policies dist/
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw debug_imu debug_imu_observations debug_motor_speed debug_policy_io calibrate_imu test_imu_latency test_imu_fusion_latency test_motor_latency test_controller init em check_voltage libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw calibrate_imu test_controller init em check_voltage policies libonnxruntime.so*
           cd ..
 
       - name: Create Release
@@ -88,63 +83,23 @@ jobs:
 
             Cross-compiled binaries for Raspberry Pi Zero 2W (ARM64).
 
-            ### Included Files
-
-            - **microduck_runtime**: Main robot control runtime
-            - **calibrate_imu**: IMU calibration tool (saves calibration for all programs)
-            - **test_imu**: BNO055 IMU testing tool
-            - **test_imu2**: Simple IMU axis remapping verification tool (manual transformation)
-            - **test_imu3**: Hardware-based IMU axis remapping using bno055 crate
-            - **test_imu_latency**: IMU latency measurement tool (raw sensors)
-            - **test_imu_fusion_latency**: IMU fusion latency test (projected gravity used in control loop)
-            - **test_motor_latency**: Motor command-to-movement latency test (measures actuation delay)
-            - **debug_imu**: Detailed IMU debugging tool with Euler angles
-            - **debug_imu_observations**: Shows exact policy observations (gyro + projected gravity)
-            - **debug_motor_speed**: Motor speed unit verification tool (sine wave test)
-            - **debug_policy_io**: Logs policy inputs/outputs to CSV for debugging
-            - **test_i2c_raw**: Raw I2C diagnostic tool
-            - **test_controller**: Xbox controller input testing tool
-            - **init**: Enable torque and move all motors to default pose
-            - **em**: Emergency stop — disable motor torque
-            - **check_voltage**: Read present input voltage for all motors
-            - **libonnxruntime.so**: ONNX Runtime library (required for policy inference)
-
             ### Installation
 
             ```bash
             curl -sSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
             ```
 
-            Or download and extract manually:
-            ```bash
-            tar xzf microduck_runtime-aarch64-linux.tar.gz
-            sudo mv microduck_runtime test_imu debug_imu test_i2c_raw /usr/local/bin/
-            ```
+            ### Included
 
-            ### Usage
-
-            ```bash
-            # Main runtime
-            microduck_runtime --help
-            microduck_runtime --dummy --port /dev/ttyAMA0
-
-            # Test IMU (basic)
-            test_imu
-
-            # Measure IMU latency (raw sensors)
-            test_imu_latency
-
-            # Measure fusion latency (what control loop uses)
-            test_imu_fusion_latency
-
-            # Measure motor actuation latency
-            test_motor_latency
-
-            # Debug IMU (detailed with Euler angles and orientation checking)
-            debug_imu
-
-            # Diagnose I2C issues
-            test_i2c_raw
-            ```
+            - **microduck_runtime**: Main robot control runtime
+            - **calibrate_imu**: IMU calibration tool
+            - **test_imu / test_imu2 / test_imu3**: BNO055 IMU tests
+            - **test_i2c_raw**: Raw I2C diagnostic tool
+            - **test_controller**: Xbox controller input test
+            - **init**: Enable torque and move all motors to default pose
+            - **em**: Emergency stop — disable motor torque
+            - **check_voltage**: Read present input voltage for all motors
+            - **policies/**: Bundled ONNX policy models
+            - **libonnxruntime.so**: ONNX Runtime library
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
