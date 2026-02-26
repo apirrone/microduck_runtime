@@ -36,6 +36,10 @@ pub struct ImuController {
     gravity_offset: [f64; 3],
     /// Use projected gravity from quaternion (true) or raw accelerometer (false)
     use_projected_gravity: bool,
+    /// Last 2 raw gyro readings for 3-sample median filter (spike rejection)
+    gyro_history: [[f64; 3]; 2],
+    /// Last 2 raw accel readings for 3-sample median filter (spike rejection)
+    accel_history: [[f64; 3]; 2],
 }
 
 impl ImuController {
@@ -90,6 +94,8 @@ impl ImuController {
             delay,
             gravity_offset: [0.0; 3],  // No offset by default
             use_projected_gravity,
+            gyro_history: [[0.0; 3]; 2],
+            accel_history: [[0.0; 3]; 2],
         };
 
         // Automatically load calibration if it exists
@@ -241,6 +247,11 @@ impl ImuController {
         ]
     }
 
+    /// Median of 3 values — used for single-sample spike rejection
+    fn median3(a: f64, b: f64, c: f64) -> f64 {
+        a.max(b).min(c).max(a.min(b))
+    }
+
     /// Read current IMU data
     /// Returns gyroscope (rad/s) and normalized projected gravity (unit vector)
     /// Projected gravity can come from either:
@@ -253,11 +264,20 @@ impl ImuController {
 
         // Convert gyroscope to rad/s (from 1/16 deg/s)
         let gyro_scale = std::f64::consts::PI / 180.0;
-        let gyro_rad_s = [
+        let gyro_raw = [
             gyro.x as f64 * gyro_scale,
             gyro.y as f64 * gyro_scale,
             gyro.z as f64 * gyro_scale,
         ];
+
+        // 3-sample median filter: eliminates single-sample spikes with no tuning required
+        let gyro_rad_s = [
+            Self::median3(self.gyro_history[0][0], self.gyro_history[1][0], gyro_raw[0]),
+            Self::median3(self.gyro_history[0][1], self.gyro_history[1][1], gyro_raw[1]),
+            Self::median3(self.gyro_history[0][2], self.gyro_history[1][2], gyro_raw[2]),
+        ];
+        self.gyro_history[0] = self.gyro_history[1];
+        self.gyro_history[1] = gyro_raw;
 
         // Compute projected gravity based on mode
         let proj_grav = if self.use_projected_gravity {
@@ -344,9 +364,18 @@ impl ImuController {
             [0.0, 0.0, -1.0]
         };
 
+        // 3-sample median filter on accel/projected gravity
+        let accel_filtered = [
+            Self::median3(self.accel_history[0][0], self.accel_history[1][0], accel_final[0]),
+            Self::median3(self.accel_history[0][1], self.accel_history[1][1], accel_final[1]),
+            Self::median3(self.accel_history[0][2], self.accel_history[1][2], accel_final[2]),
+        ];
+        self.accel_history[0] = self.accel_history[1];
+        self.accel_history[1] = accel_final;
+
         Ok(ImuData {
             gyro: gyro_rad_s,
-            accel: accel_final,
+            accel: accel_filtered,
         })
     }
 
