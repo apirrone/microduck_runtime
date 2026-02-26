@@ -1,417 +1,57 @@
-# Microduck Robot Runtime
+# Microduck Runtime
 
-A performant Rust runtime for the Microduck robot, designed to run on Raspberry Pi Zero 2W with Dynamixel XL330 motors.
+Runtime for the Microduck robot. Runs on Raspberry Pi Zero 2W with 14 Dynamixel XL330 motors and a BNO055 IMU.
 
-## Installation
-
-### Quick Install (Raspberry Pi)
-
-On your Raspberry Pi Zero 2W, run:
+## Install
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash
 ```
 
-Replace `apirrone` with your GitHub username.
-
-### From Release
-
-Download the latest release from the [Releases page](https://github.com/apirrone/microduck_runtime/releases) and extract:
+## Recommended command
 
 ```bash
-tar xzf microduck_runtime-aarch64-linux.tar.gz
-sudo mv microduck_runtime /usr/local/bin/
+microduck_runtime -m output.onnx --action-scale 0.5 --head-max 1.5 --max-linear-vel 0.5 --max-angular-vel 4 --gravity-offset-x 0.1 -c
 ```
 
-### From Source
-
-```bash
-git clone https://github.com/apirrone/microduck_runtime
-cd microduck_runtime
-cargo build --release
-sudo cp target/release/microduck_runtime /usr/local/bin/
-```
-
-## Features
-
-- **Motor Control**: Interfaces with 14 Dynamixel XL330 motors using [rustypot](https://github.com/pollen-robotics/rustypot)
-- **IMU Support**: Placeholder for BNO055 IMU integration (dummy implementation for now)
-- **Observation Space**: Collects 51-dimensional observation vectors for RL policy
-- **ONNX Runtime**: Ready for policy inference using ONNX models (placeholder implementation)
-- **Performance Optimized**: Designed for real-time control on Raspberry Pi Zero 2W
-- **Clean Architecture**: Modular design with separate concerns
-
-## Architecture
-
-The runtime is organized into modules:
-
-- `motor.rs` - XL330 motor controller with sync read/write operations
-- `imu.rs` - IMU interface (dummy for BNO055, ready for real implementation)
-- `observation.rs` - Observation space collector (51-dim vector)
-- `policy.rs` - ONNX runtime policy inference (placeholder)
-- `main.rs` - Main control loop with timing and error handling
-
-## Observation Space (51 dimensions)
-
-The observation vector contains:
-- Gyroscope [x, y, z] (3)
-- Accelerometer [x, y, z] (3)
-- Command [x, y, z] (3)
-- Joint positions **relative to default position** (14) - `dof_pos - init_pos`
-- Joint velocities (14) - `dof_vel`
-- Last action (14)
-
-## Action Space (14 dimensions)
-
-The policy outputs **offsets from the default position** (14 values).
-
-The final motor targets are computed as:
-```rust
-motor_targets = DEFAULT_POSITION + action
-```
-
-This matches the Python implementation:
-```python
-self.motor_targets = self.init_pos + action
-```
-
-## Default Position
-
-The default position (`DEFAULT_POSITION` in `src/motor.rs`) represents the robot's initial stance with bent legs.
-
-Currently set to all zeros:
-```rust
-pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [0.0; NUM_MOTORS];
-```
-
-**TODO**: Update these values to match your robot's actual default stance. The order follows the motor ordering above (left leg, neck/head, right leg):
-
-```rust
-pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [
-    // Left leg (20-24)
-    0.0, 0.0, 0.0, 0.0, 0.0,
-    // Neck/head (30-33)
-    0.0, 0.0, 0.0, 0.0,
-    // Right leg (10-14)
-    0.0, 0.0, 0.0, 0.0, 0.0,
-];
-```
-
-## Configuration
-
-Configuration is done via command-line arguments:
-
-```bash
-# View all options
-cargo run --release -- --help
-
-# Basic options
---port <PORT>          Serial port for motor communication [default: /dev/ttyUSB0]
---baudrate <BAUDRATE>  Motor communication baudrate [default: 1000000]
---freq <FREQ>          Control loop frequency in Hz [default: 50]
---dummy                Use dummy policy (always outputs zeros) for testing
---model <MODEL>        Path to ONNX model file
-
-# PID tuning options
---kp <KP>              Position P gain for motors [default: 400]
---ki <KI>              Position I gain for motors [default: 0]
---kd <KD>              Position D gain for motors [default: 0]
-```
-
-**Motor IDs and Ordering**:
-
-The 14 motors are organized as: left leg (5), neck/head (4), right leg (5)
-
-| Index | Motor ID | Joint Name       | Body Part |
-|-------|----------|------------------|-----------|
-| 0     | 20       | left_hip_yaw     | Left Leg  |
-| 1     | 21       | left_hip_roll    | Left Leg  |
-| 2     | 22       | left_hip_pitch   | Left Leg  |
-| 3     | 23       | left_knee        | Left Leg  |
-| 4     | 24       | left_ankle       | Left Leg  |
-| 5     | 30       | neck_pitch       | Neck/Head |
-| 6     | 31       | head_pitch       | Neck/Head |
-| 7     | 32       | head_yaw         | Neck/Head |
-| 8     | 33       | head_roll        | Neck/Head |
-| 9     | 10       | right_hip_yaw    | Right Leg |
-| 10    | 11       | right_hip_roll   | Right Leg |
-| 11    | 12       | right_hip_pitch  | Right Leg |
-| 12    | 13       | right_knee       | Right Leg |
-| 13    | 14       | right_ankle      | Right Leg |
-
-This ordering is used consistently in observation and action vectors.
-
-## Building
-
-```bash
-# Development build
-cargo build
-
-# Release build (optimized for Raspberry Pi)
-cargo build --release
-```
-
-## Running
-
-```bash
-# Make sure the motors are connected via USB serial adapter
-sudo chmod 666 /dev/ttyUSB0  # Grant permissions (or run as root)
-
-# Run with dummy policy (outputs zeros - motors stay at default position)
-cargo run --release -- --dummy
-
-# Run with custom port and frequency
-cargo run --release -- --dummy --port /dev/ttyACM0 --freq 100
-
-# Run with custom PID gains
-cargo run --release -- --dummy --kp 600 --kd 30
-
-# Run with ONNX model (when you have one)
-cargo run --release -- --model /path/to/model.onnx
-
-# Run with ONNX model and custom settings
-cargo run --release -- --model policy.onnx --freq 200 --kp 500
-```
-
-The runtime will:
-1. Initialize motor controller
-2. Initialize IMU (dummy mode)
-3. Load policy (dummy or ONNX)
-4. Enable torque on all motors
-5. Start the control loop at specified Hz
-6. Print statistics every second including:
-   - Loop timing performance
-   - Leg current consumption (left, right, and total in mA)
-
-Press Ctrl+C to safely shutdown. The runtime will:
-- Detect the Ctrl+C signal
-- Exit the control loop cleanly
-- Close all connections
-- **Motors remain enabled** at their last commanded position
-
-The shutdown should take less than 1 second.
-
-**Note**: Motors will NOT be disabled on exit - they will hold their last position. To disable motors, you need to either:
-- Power off the motors
-- Run a separate command to disable torque
-- Modify the `shutdown()` method to call `set_torque_enable(false)`
-
-## PID Tuning
-
-The runtime allows you to adjust PID gains for motor position control:
-
-```bash
-# Test with different P gain
-cargo run --release -- --dummy --kp 800
-
-# Test with softer control
-cargo run --release -- --dummy --kp 200
-
-# Add some damping with D gain
-cargo run --release -- --dummy --kp 400 --kd 50
-```
-
-**Default PID values:**
-- **kP = 400**: Proportional gain (stiffness)
-- **kI = 0**: Integral gain (usually not needed)
-- **kD = 0**: Derivative gain (damping)
-
-**Effect of gains:**
-- **Higher kP**: Stiffer, more responsive, but can oscillate or overshoot
-- **Lower kP**: Softer, smoother, but slower response
-- **kD**: Adds damping to reduce oscillations
-- **kI**: Corrects steady-state error (rarely needed for position control)
-
-The PID gains are applied to all 14 motors during initialization.
-
-**Tips for tuning:**
-1. Start with kP=400 (default) and observe the squat motion
-2. If motors oscillate or shake, reduce kP or add kD
-3. If response is too slow, increase kP
-4. Monitor current consumption - higher gains = higher current
-5. The squat test is ideal for tuning as it exercises the full range of motion
-
-### Testing Before Training
-
-Use the `--dummy` flag to test your hardware setup without a trained policy. The dummy policy generates a **squatting motion** to test the legs:
-
-**Squat Motion Parameters:**
-- Frequency: 0.5 Hz (one squat every 2 seconds)
-- Amplitude: 0.2 rad for hip pitch and ankle
-- Amplitude: 0.4 rad for knees (2x amplitude)
-- Both legs move in sync
-
-This allows you to verify:
-- Motor communication is working
-- Default positions are correct
-- Motor orientations match expectations
-- Legs can perform coordinated motion
-
-### Current Monitoring
-
-The runtime automatically monitors leg current consumption and displays it every second:
-
-```
-Running: 100 iterations, avg loop time: 8.45 ms (84.5% of target) | Leg currents: Left: 245 mA, Right: 238 mA, Total: 483 mA
-```
-
-**Current measurements include:**
-- **Left leg**: Sum of absolute currents for motors 20-24 (5 motors)
-- **Right leg**: Sum of absolute currents for motors 10-14 (5 motors)
-- **Total**: Combined current for all leg motors (excludes neck/head)
-
-This is useful for:
-- Detecting mechanical issues (unusually high current)
-- Monitoring power consumption
-- Validating smooth motion (current should vary smoothly during squats)
-- Comparing left/right leg balance
-
-## Adding ONNX Policy
-
-To integrate your trained RL policy:
-
-1. Uncomment the ONNX code in `src/policy.rs` (in the `new_onnx` and `infer` methods)
-2. Place your `.onnx` model file on the Raspberry Pi
-3. Run with the `--model` flag:
-
-```bash
-cargo run --release -- --model /path/to/your/model.onnx
-```
-
-The policy will receive 51-dimensional observations and output 14-dimensional action offsets.
-
-## Implementing Real IMU
-
-When you connect the BNO055 IMU, update `src/imu.rs`:
-
-1. Add BNO055 driver crate (e.g., `bno055` from crates.io)
-2. Replace the dummy implementation with real I2C communication
-3. Convert sensor data to appropriate units (rad/s for gyro, m/s² for accel)
-
-Example:
-```rust
-// In src/imu.rs
-use bno055::{Bno055, BNO055_DEFAULT_ADDR};
-
-pub struct ImuController {
-    sensor: Bno055<I2c>,
-}
-
-impl ImuController {
-    pub fn new() -> Result<Self> {
-        // Initialize I2C and BNO055
-        let i2c = I2c::new(...)?;
-        let sensor = Bno055::new(i2c)?;
-        Ok(Self { sensor })
-    }
-
-    pub fn read(&mut self) -> Result<ImuData> {
-        let gyro = self.sensor.gyro()?;
-        let accel = self.sensor.accel()?;
-        Ok(ImuData {
-            gyro: [gyro.x, gyro.y, gyro.z],
-            accel: [accel.x, accel.y, accel.z],
-        })
-    }
-}
-```
-
-## Performance Considerations
-
-For Raspberry Pi Zero 2W:
-- Using sync read/write for efficient communication with multiple motors
-- 50 Hz control loop by default (20ms per iteration)
-- Release build with optimizations enabled
-- ONNX Runtime configured with limited threads
-- Control frequency can be adjusted via `--freq` flag (e.g., 25-100 Hz)
-
-## Conversion Functions
-
-Motor velocity conversion from XL330 raw values:
-```rust
-velocity_rad_per_sec = raw_value * 0.229 * (2π / 60)
-```
-
-This matches the Python implementation from `~/Rhoban/bam/bam/xl330/record.py`.
-
-## Dependencies
-
-- `rustypot` - Motor communication
-- `serialport` - Serial port access
-- `ort` - ONNX Runtime bindings
-- `anyhow` - Error handling
-- `ctrlc` - Graceful shutdown
-- `openssl` (vendored) - For cross-compilation compatibility
-
-**Note**: We use vendored OpenSSL (`features = ["vendored"]`) to enable cross-compilation for ARM64. This compiles OpenSSL from source during the build.
-
-## Creating Releases
-
-### First-Time Setup
-
-Before creating your first release:
-
-1. **Replace `apirrone` in `install.sh`** with your GitHub username
-2. **Update README.md** URLs with your GitHub username
-3. **Enable GitHub Actions** in repository settings (Settings > Actions > General > Workflow permissions: "Read and write permissions")
-
-See [SETUP_GITHUB.md](SETUP_GITHUB.md) for detailed setup instructions.
-
-### Creating a Release
-
-To create a new release with automatic ARM64 builds:
-
-1. **Tag a new version:**
-   ```bash
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-
-2. **GitHub Actions will automatically:**
-   - Cross-compile for ARM64 (Raspberry Pi Zero 2W)
-   - Create a release with the binary
-   - Generate release notes
-
-3. **Users can then install with:**
-   ```bash
-   curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash
-   ```
-
-The CI workflow is in `.github/workflows/release.yml` and triggers on any tag starting with `v`.
-
-## License
-
-Same as your project.
-
-## Example Workflow
-
-1. **Initial Hardware Test** - Test motors with dummy policy:
-   ```bash
-   cargo run --release -- --dummy
-   ```
-   The robot should initialize at default position and start doing small squats at 0.5 Hz.
-
-2. **Adjust Default Position** - Update `DEFAULT_POSITION` in `src/motor.rs` to match your robot's stance.
-
-3. **Test at Different Frequencies**:
-   ```bash
-   cargo run --release -- --dummy --freq 25   # Lower freq for testing
-   cargo run --release -- --dummy --freq 100  # Higher freq for performance
-   ```
-
-4. **Deploy Trained Policy** - Once you have an ONNX model:
-   ```bash
-   cargo run --release -- --model microduck_policy.onnx
-   ```
-
-5. **Integrate Real IMU** - Implement BNO055 driver in `src/imu.rs`
-
-## Next Steps
-
-1. Test with actual hardware using `--dummy` flag
-2. Calibrate and set `DEFAULT_POSITION` values
-3. Train RL policy and export to ONNX
-4. Integrate trained ONNX policy
-5. Connect and implement BNO055 IMU
-6. Tune control loop frequency based on performance
-7. Add telemetry/logging for debugging
+## Controller
+
+| Button | Action |
+|--------|--------|
+| Start | Enable / disable policy |
+| Y | Toggle head mode (joysticks control head joints instead of velocity) |
+| Left stick | Forward / strafe |
+| Right stick Y | Turn |
+
+**Head mode** (Y button):
+
+| Stick | Joint |
+|-------|-------|
+| Left stick X | Head pitch |
+| Left stick Y | Head yaw |
+| Right stick X | Neck pitch |
+| Right stick Y | Head roll |
+
+Head offsets are preserved when switching back to walking mode.
+
+**Fall detection**: if the robot is detected as fallen for 0.2s, the policy stops and motors go limp (kP=50). Press Start to recover.
+
+## Binaries
+
+| Binary | Description |
+|--------|-------------|
+| `microduck_runtime` | Main runtime — runs the policy and controls the robot |
+| `init` | Enable torque on all motors |
+| `em` | Emergency stop — disable torque on all motors |
+| `check_voltage` | Check power supply voltage |
+| `calibrate_imu` | Calibrate the IMU and save calibration to file |
+| `debug_imu` | Display IMU euler angles and quaternion data |
+| `debug_imu_observations` | Display live IMU observations as seen by the policy |
+| `debug_motor_speed` | Monitor motor speeds |
+| `debug_policy_io` | Test policy input/output with live motors and IMU |
+| `test_controller` | Test gamepad input with a visual bar display |
+| `test_imu` | Verify BNO055 IMU is working |
+| `test_imu_latency` | Measure IMU read latency |
+| `test_imu_fusion_latency` | Measure IMU sensor fusion latency |
+| `test_motor_latency` | Measure motor command latency |
+| `test_i2c_raw` | Raw I2C communication test with the BNO055 |
