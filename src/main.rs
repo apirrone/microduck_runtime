@@ -169,6 +169,7 @@ struct Runtime {
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
     head_max: f64,  // Max head offset in radians
     y_button_prev_state: bool,  // Track Y button state for edge detection
+    fallen: bool,  // Whether the robot is currently detected as fallen
 }
 
 impl Runtime {
@@ -329,6 +330,7 @@ impl Runtime {
             head_offsets: [0.0; 4],
             head_max: args.head_max,
             y_button_prev_state: false,
+            fallen: false,
         })
     }
 
@@ -397,15 +399,25 @@ impl Runtime {
                 self.command[2] = -right_y as f64 * 1.5 * self.max_angular_vel;
             }
 
-            // Handle Start button to toggle policy inference
+            // Handle Start button to toggle policy inference (or recover from fall)
             let start_pressed = controller.is_button_pressed("Start");
             if start_pressed && !self.start_button_prev_state {
                 // Button was just pressed (rising edge)
-                self.policy_enabled = !self.policy_enabled;
-                if self.policy_enabled {
-                    println!("▶ Policy inference ENABLED");
+                if self.fallen {
+                    // Recover from fall: restore kP and re-enable policy
+                    self.fallen = false;
+                    self.policy_enabled = true;
+                    let (kp, ki, kd) = self.pid_gains;
+                    self.motor_controller.set_pid_gains(kp, ki, kd)
+                        .context("Failed to restore PID gains after fall")?;
+                    println!("▶ Fall recovery: PID restored (kP={}), policy ENABLED", kp);
                 } else {
-                    println!("⏸ Policy inference DISABLED - returning to default pose");
+                    self.policy_enabled = !self.policy_enabled;
+                    if self.policy_enabled {
+                        println!("▶ Policy inference ENABLED");
+                    } else {
+                        println!("⏸ Policy inference DISABLED - returning to default pose");
+                    }
                 }
             }
             self.start_button_prev_state = start_pressed;
@@ -433,6 +445,17 @@ impl Runtime {
                 imu_data.accel[1] /= mag;
                 imu_data.accel[2] /= mag;
             }
+        }
+
+        // Fall detection: when upright accel[2] ≈ -1.0; if it rises above -0.5
+        // the robot has tipped more than ~60° from vertical
+        let is_fallen = imu_data.accel[2] > -0.5;
+        if is_fallen && !self.fallen {
+            self.fallen = true;
+            self.policy_enabled = false;
+            self.motor_controller.set_pid_gains(50, self.pid_gains.1, self.pid_gains.2)
+                .context("Failed to set fall-limp PID gains")?;
+            println!("⚠ FALLEN! Motors limp (kP=50), policy stopped. Press Start to recover.");
         }
 
         // Read motor state
