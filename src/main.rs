@@ -170,6 +170,7 @@ struct Runtime {
     head_max: f64,  // Max head offset in radians
     y_button_prev_state: bool,  // Track Y button state for edge detection
     fallen: bool,  // Whether the robot is currently detected as fallen
+    fall_detected_since: Option<Instant>,  // When continuous fall detection started (for debounce)
 }
 
 impl Runtime {
@@ -331,6 +332,7 @@ impl Runtime {
             head_max: args.head_max,
             y_button_prev_state: false,
             fallen: false,
+            fall_detected_since: None,
         })
     }
 
@@ -406,6 +408,7 @@ impl Runtime {
                 if self.fallen {
                     // Recover from fall: restore kP and re-enable policy
                     self.fallen = false;
+                    self.fall_detected_since = None;
                     self.policy_enabled = true;
                     let (kp, ki, kd) = self.pid_gains;
                     self.motor_controller.set_pid_gains(kp, ki, kd)
@@ -449,13 +452,21 @@ impl Runtime {
 
         // Fall detection: accel is projected gravity from quaternion (no walking dynamics).
         // When upright accel[2] ≈ -1.0; above -0.5 means >60° tilt.
-        let is_fallen = imu_data.accel[2] > -0.5;
-        if is_fallen && !self.fallen {
-            self.fallen = true;
-            self.policy_enabled = false;
-            self.motor_controller.set_pid_gains(50, self.pid_gains.1, self.pid_gains.2)
-                .context("Failed to set fall-limp PID gains")?;
-            println!("⚠ FALLEN! Motors limp (kP=50), policy stopped. Press Start to recover.");
+        // Debounce: only trigger after 0.2s of continuous detection.
+        if !self.fallen {
+            if imu_data.accel[2] > -0.5 {
+                let since = self.fall_detected_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_millis(200) {
+                    self.fallen = true;
+                    self.fall_detected_since = None;
+                    self.policy_enabled = false;
+                    self.motor_controller.set_pid_gains(50, self.pid_gains.1, self.pid_gains.2)
+                        .context("Failed to set fall-limp PID gains")?;
+                    println!("⚠ FALLEN! Motors limp (kP=50), policy stopped. Press Start to recover.");
+                }
+            } else {
+                self.fall_detected_since = None;  // Reset timer if robot recovers before threshold
+            }
         }
 
         // Read motor state
