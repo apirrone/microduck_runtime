@@ -2,13 +2,31 @@
 
 Runtime for the Microduck robot. Runs on Raspberry Pi Zero 2W with 14 Dynamixel XL330 motors and a BNO055 IMU.
 
-## Install
+
+## Install command
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash
 ```
 
-## Recommended command
+## RPI setup
+- `scp rpi_setup/config.txt in /boot/firmware/`
+- `scp rpi_setip/.bashrc in ~/`
+- run `sudo rpi-config`
+    - interface
+        - enable i2c
+        - disable serial console, enable serial port
+-  `sudo reboot 0`
+- `curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash`
+- (Optional if trouble connecting the bluetooth controller. I use a xbox one controller btw)
+    - `sudo btmgmt power off`
+    - `sudo btmgmt privacy on`
+    - `sudo btmgmt power on`
+- run `bluetoothctl`
+    - scan on    - pair <mac>    - connect <mac>    - trust <mac>
+- run `test_controller`
+
+## Recommended run command
 
 ```bash
 microduck_runtime -m output.onnx --action-scale 0.5 --head-max 1.5 --max-linear-vel 0.5 --max-angular-vel 4 --gravity-offset-x 0.1 -c
@@ -36,7 +54,9 @@ Head offsets are preserved when switching back to walking mode.
 
 **Fall detection**: if the robot is detected as fallen for 0.2s, the policy stops and motors go limp (kP=50). Press Start to recover.
 
-## Binaries
+## Commands
+
+These commands are available after installing with the curl command : 
 
 | Binary | Description |
 |--------|-------------|
