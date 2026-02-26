@@ -377,7 +377,6 @@ impl Runtime {
                     self.command = [0.0; 3];
                     println!("HEAD mode: ON (L-stick: pitch/yaw, R-stick: roll/neck_pitch)");
                 } else {
-                    self.head_offsets = [0.0; 4];
                     println!("HEAD mode: OFF");
                 }
             }
