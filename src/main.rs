@@ -447,8 +447,8 @@ impl Runtime {
             }
         }
 
-        // Fall detection: when upright accel[2] ≈ -1.0; if it rises above -0.5
-        // the robot has tipped more than ~60° from vertical
+        // Fall detection: accel is projected gravity from quaternion (no walking dynamics).
+        // When upright accel[2] ≈ -1.0; above -0.5 means >60° tilt.
         let is_fallen = imu_data.accel[2] > -0.5;
         if is_fallen && !self.fallen {
             self.fallen = true;
