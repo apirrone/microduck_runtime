@@ -45,13 +45,8 @@ Head offsets are preserved when switching back to walking mode.
 | `em` | Emergency stop — disable torque on all motors |
 | `check_voltage` | Check power supply voltage |
 | `calibrate_imu` | Calibrate the IMU and save calibration to file |
-| `debug_imu` | Display IMU euler angles and quaternion data |
-| `debug_imu_observations` | Display live IMU observations as seen by the policy |
-| `debug_motor_speed` | Monitor motor speeds |
-| `debug_policy_io` | Test policy input/output with live motors and IMU |
 | `test_controller` | Test gamepad input with a visual bar display |
 | `test_imu` | Verify BNO055 IMU is working |
-| `test_imu_latency` | Measure IMU read latency |
-| `test_imu_fusion_latency` | Measure IMU sensor fusion latency |
-| `test_motor_latency` | Measure motor command latency |
+| `test_imu2` | Low-level I2C IMU acceleration data reading test |
+| `test_imu3` | BNO055 IMU test with hardware axis remapping |
 | `test_i2c_raw` | Raw I2C communication test with the BNO055 |

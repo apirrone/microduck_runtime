@@ -20,10 +20,6 @@ name = "test_i2c_raw"
 path = "src/bin/test_i2c_raw.rs"
 
 [[bin]]
-name = "debug_imu"
-path = "src/bin/debug_imu.rs"
-
-[[bin]]
 name = "test_imu2"
 path = "src/bin/test_imu2.rs"
 
@@ -32,32 +28,8 @@ name = "test_imu3"
 path = "src/bin/test_imu3.rs"
 
 [[bin]]
-name = "debug_imu_observations"
-path = "src/bin/debug_imu_observations.rs"
-
-[[bin]]
-name = "debug_motor_speed"
-path = "src/bin/debug_motor_speed.rs"
-
-[[bin]]
-name = "debug_policy_io"
-path = "src/bin/debug_policy_io.rs"
-
-[[bin]]
 name = "calibrate_imu"
 path = "src/bin/calibrate_imu.rs"
-
-[[bin]]
-name = "test_imu_latency"
-path = "src/bin/test_imu_latency.rs"
-
-[[bin]]
-name = "test_imu_fusion_latency"
-path = "src/bin/test_imu_fusion_latency.rs"
-
-[[bin]]
-name = "test_motor_latency"
-path = "src/bin/test_motor_latency.rs"
 
 [[bin]]
 name = "test_controller"

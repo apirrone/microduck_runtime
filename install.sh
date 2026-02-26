@@ -86,88 +86,18 @@ if [ ! -f "$BINARY_NAME" ]; then
     exit 1
 fi
 
-if [ ! -f "test_imu" ]; then
-    echo -e "${YELLOW}Warning: test_imu binary not found in archive.${NC}"
-fi
-
-if [ ! -f "test_imu2" ]; then
-    echo -e "${YELLOW}Warning: test_imu2 binary not found in archive.${NC}"
-fi
-
-if [ ! -f "test_imu3" ]; then
-    echo -e "${YELLOW}Warning: test_imu3 binary not found in archive.${NC}"
-fi
-
-if [ ! -f "debug_imu" ]; then
-    echo -e "${YELLOW}Warning: debug_imu binary not found in archive.${NC}"
-fi
-
-if [ ! -f "debug_imu_observations" ]; then
-    echo -e "${YELLOW}Warning: debug_imu_observations binary not found in archive.${NC}"
-fi
-
-if [ ! -f "debug_motor_speed" ]; then
-    echo -e "${YELLOW}Warning: debug_motor_speed binary not found in archive.${NC}"
-fi
-
-if [ ! -f "debug_policy_io" ]; then
-    echo -e "${YELLOW}Warning: debug_policy_io binary not found in archive.${NC}"
-fi
-
-if [ ! -f "calibrate_imu" ]; then
-    echo -e "${YELLOW}Warning: calibrate_imu binary not found in archive.${NC}"
-fi
-
-if [ ! -f "test_i2c_raw" ]; then
-    echo -e "${YELLOW}Warning: test_i2c_raw binary not found in archive.${NC}"
-fi
-
-if [ ! -f "test_imu_latency" ]; then
-    echo -e "${YELLOW}Warning: test_imu_latency binary not found in archive.${NC}"
-fi
-
-if [ ! -f "test_imu_fusion_latency" ]; then
-    echo -e "${YELLOW}Warning: test_imu_fusion_latency binary not found in archive.${NC}"
-fi
-
-if [ ! -f "test_motor_latency" ]; then
-    echo -e "${YELLOW}Warning: test_motor_latency binary not found in archive.${NC}"
-fi
-
-if [ ! -f "test_controller" ]; then
-    echo -e "${YELLOW}Warning: test_controller binary not found in archive.${NC}"
-fi
-
-if [ ! -f "init" ]; then
-    echo -e "${YELLOW}Warning: init binary not found in archive.${NC}"
-fi
-
-if [ ! -f "em" ]; then
-    echo -e "${YELLOW}Warning: em binary not found in archive.${NC}"
-fi
-
-if [ ! -f "check_voltage" ]; then
-    echo -e "${YELLOW}Warning: check_voltage binary not found in archive.${NC}"
-fi
+OPTIONAL_BINS="test_imu test_imu2 test_imu3 calibrate_imu test_i2c_raw test_controller init em check_voltage"
+for bin in $OPTIONAL_BINS; do
+    if [ ! -f "$bin" ]; then
+        echo -e "${YELLOW}Warning: $bin binary not found in archive.${NC}"
+    fi
+done
 
 # Make binaries executable
 chmod +x "$BINARY_NAME"
-[ -f "test_imu" ] && chmod +x "test_imu"
-[ -f "test_imu2" ] && chmod +x "test_imu2"
-[ -f "test_imu3" ] && chmod +x "test_imu3"
-[ -f "debug_imu" ] && chmod +x "debug_imu"
-[ -f "debug_imu_observations" ] && chmod +x "debug_imu_observations"
-[ -f "debug_motor_speed" ] && chmod +x "debug_motor_speed"
-[ -f "debug_policy_io" ] && chmod +x "debug_policy_io"
-[ -f "calibrate_imu" ] && chmod +x "calibrate_imu"
-[ -f "test_i2c_raw" ] && chmod +x "test_i2c_raw"
-[ -f "test_imu_latency" ] && chmod +x "test_imu_latency"
-[ -f "test_imu_fusion_latency" ] && chmod +x "test_imu_fusion_latency"
-[ -f "test_motor_latency" ] && chmod +x "test_motor_latency"
-[ -f "test_controller" ] && chmod +x "test_controller"
-[ -f "init" ] && chmod +x "init"
-[ -f "em" ] && chmod +x "em"
-[ -f "check_voltage" ] && chmod +x "check_voltage"
+for bin in $OPTIONAL_BINS; do
+    [ -f "$bin" ] && chmod +x "$bin"
+done
 
 # Install ONNX Runtime library
 ONNX_LIB_DIR="/usr/local/lib"
@@ -188,41 +118,15 @@ fi
 echo "Installing to $INSTALL_DIR..."
 if [ -w "$INSTALL_DIR" ]; then
     mv "$BINARY_NAME" "$INSTALL_DIR/"
-    [ -f "test_imu" ] && mv "test_imu" "$INSTALL_DIR/"
-    [ -f "test_imu2" ] && mv "test_imu2" "$INSTALL_DIR/"
-    [ -f "test_imu3" ] && mv "test_imu3" "$INSTALL_DIR/"
-    [ -f "debug_imu" ] && mv "debug_imu" "$INSTALL_DIR/"
-    [ -f "debug_imu_observations" ] && mv "debug_imu_observations" "$INSTALL_DIR/"
-    [ -f "debug_motor_speed" ] && mv "debug_motor_speed" "$INSTALL_DIR/"
-    [ -f "debug_policy_io" ] && mv "debug_policy_io" "$INSTALL_DIR/"
-    [ -f "calibrate_imu" ] && mv "calibrate_imu" "$INSTALL_DIR/"
-    [ -f "test_i2c_raw" ] && mv "test_i2c_raw" "$INSTALL_DIR/"
-    [ -f "test_imu_latency" ] && mv "test_imu_latency" "$INSTALL_DIR/"
-    [ -f "test_imu_fusion_latency" ] && mv "test_imu_fusion_latency" "$INSTALL_DIR/"
-    [ -f "test_motor_latency" ] && mv "test_motor_latency" "$INSTALL_DIR/"
-    [ -f "test_controller" ] && mv "test_controller" "$INSTALL_DIR/"
-    [ -f "init" ] && mv "init" "$INSTALL_DIR/"
-    [ -f "em" ] && mv "em" "$INSTALL_DIR/"
-    [ -f "check_voltage" ] && mv "check_voltage" "$INSTALL_DIR/"
+    for bin in $OPTIONAL_BINS; do
+        [ -f "$bin" ] && mv "$bin" "$INSTALL_DIR/"
+    done
 else
     echo "Installing with sudo (requires password)..."
     sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
-    [ -f "test_imu" ] && sudo mv "test_imu" "$INSTALL_DIR/"
-    [ -f "test_imu2" ] && sudo mv "test_imu2" "$INSTALL_DIR/"
-    [ -f "test_imu3" ] && sudo mv "test_imu3" "$INSTALL_DIR/"
-    [ -f "debug_imu" ] && sudo mv "debug_imu" "$INSTALL_DIR/"
-    [ -f "debug_imu_observations" ] && sudo mv "debug_imu_observations" "$INSTALL_DIR/"
-    [ -f "debug_motor_speed" ] && sudo mv "debug_motor_speed" "$INSTALL_DIR/"
-    [ -f "debug_policy_io" ] && sudo mv "debug_policy_io" "$INSTALL_DIR/"
-    [ -f "calibrate_imu" ] && sudo mv "calibrate_imu" "$INSTALL_DIR/"
-    [ -f "test_i2c_raw" ] && sudo mv "test_i2c_raw" "$INSTALL_DIR/"
-    [ -f "test_imu_latency" ] && sudo mv "test_imu_latency" "$INSTALL_DIR/"
-    [ -f "test_imu_fusion_latency" ] && sudo mv "test_imu_fusion_latency" "$INSTALL_DIR/"
-    [ -f "test_motor_latency" ] && sudo mv "test_motor_latency" "$INSTALL_DIR/"
-    [ -f "test_controller" ] && sudo mv "test_controller" "$INSTALL_DIR/"
-    [ -f "init" ] && sudo mv "init" "$INSTALL_DIR/"
-    [ -f "em" ] && sudo mv "em" "$INSTALL_DIR/"
-    [ -f "check_voltage" ] && sudo mv "check_voltage" "$INSTALL_DIR/"
+    for bin in $OPTIONAL_BINS; do
+        [ -f "$bin" ] && sudo mv "$bin" "$INSTALL_DIR/"
+    done
 fi
 
 # Cleanup
@@ -236,79 +140,7 @@ if command -v $BINARY_NAME &> /dev/null; then
     echo -e "${GREEN}✓ Installation successful!${NC}"
     echo -e "Version: ${GREEN}$VERSION${NC}"
     echo ""
-    echo "Installed binaries:"
-    echo "  - $BINARY_NAME (main runtime)"
-    if command -v calibrate_imu &> /dev/null; then
-        echo "  - calibrate_imu (IMU calibration tool - run this first!)"
-    fi
-    if command -v test_imu &> /dev/null; then
-        echo "  - test_imu (IMU testing tool)"
-    fi
-    if command -v test_imu2 &> /dev/null; then
-        echo "  - test_imu2 (simple axis remapping test)"
-    fi
-    if command -v test_imu3 &> /dev/null; then
-        echo "  - test_imu3 (hardware axis remapping test)"
-    fi
-    if command -v debug_imu &> /dev/null; then
-        echo "  - debug_imu (detailed IMU debugging tool)"
-    fi
-    if command -v debug_imu_observations &> /dev/null; then
-        echo "  - debug_imu_observations (policy observations monitor)"
-    fi
-    if command -v debug_motor_speed &> /dev/null; then
-        echo "  - debug_motor_speed (motor speed verification)"
-    fi
-    if command -v debug_policy_io &> /dev/null; then
-        echo "  - debug_policy_io (policy I/O logger)"
-    fi
-    if command -v test_i2c_raw &> /dev/null; then
-        echo "  - test_i2c_raw (I2C diagnostic tool)"
-    fi
-    if command -v test_imu_latency &> /dev/null; then
-        echo "  - test_imu_latency (IMU latency measurement tool)"
-    fi
-    if command -v test_imu_fusion_latency &> /dev/null; then
-        echo "  - test_imu_fusion_latency (IMU fusion latency test - projected gravity)"
-    fi
-    if command -v test_motor_latency &> /dev/null; then
-        echo "  - test_motor_latency (motor command-to-movement latency test)"
-    fi
-    if command -v test_controller &> /dev/null; then
-        echo "  - test_controller (Xbox controller input test)"
-    fi
-    if command -v init &> /dev/null; then
-        echo "  - init (enable torque and move to default pose)"
-    fi
-    if command -v em &> /dev/null; then
-        echo "  - em (emergency stop: disable motor torque)"
-    fi
-    if command -v check_voltage &> /dev/null; then
-        echo "  - check_voltage (read present input voltage for all motors)"
-    fi
-    echo ""
-    echo "Usage:"
-    echo "  calibrate_imu               # IMPORTANT: Calibrate IMU first!"
-    echo "  $BINARY_NAME --help"
-    echo "  $BINARY_NAME --dummy"
-    echo "  test_imu                    # Test BNO055 IMU (basic)"
-    echo "  test_imu2                   # Simple axis remapping verification"
-    echo "  test_imu3                   # Hardware-based axis remapping (bno055 crate)"
-    echo "  debug_imu                   # Debug IMU with Euler angles"
-    echo "  debug_imu_observations      # Monitor exact policy observations"
-    echo "  debug_motor_speed           # Verify motor velocity units"
-    echo "  debug_policy_io             # Log policy inputs/outputs to CSV"
-    echo "  test_i2c_raw                # Raw I2C diagnostic"
-    echo "  test_imu_latency            # Measure IMU response latency (raw sensors)"
-    echo "  test_imu_fusion_latency     # Measure fusion latency (projected gravity)"
-    echo "  test_motor_latency          # Measure motor command-to-movement latency"
-    echo "  test_controller             # Test Xbox controller input
-  init                        # Enable torque and move to default pose
-  em                          # Emergency stop: disable motor torque
-  check_voltage               # Read present input voltage for all motors"
-    echo ""
-    echo "Example:"
-    echo "  $BINARY_NAME --dummy --port /dev/ttyAMA0 --freq 50 --kp 400"
+    echo "Run '$BINARY_NAME --help' for usage."
 else
     echo -e "${RED}Error: Installation failed.${NC}"
     echo "$BINARY_NAME not found in PATH."
