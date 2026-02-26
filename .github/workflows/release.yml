@@ -71,10 +71,11 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/test_controller dist/
           cp target/aarch64-unknown-linux-gnu/release/init dist/
           cp target/aarch64-unknown-linux-gnu/release/em dist/
+          cp target/aarch64-unknown-linux-gnu/release/check_voltage dist/
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw debug_imu debug_imu_observations debug_motor_speed debug_policy_io calibrate_imu test_imu_latency test_imu_fusion_latency test_motor_latency test_controller init em libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_imu2 test_imu3 test_i2c_raw debug_imu debug_imu_observations debug_motor_speed debug_policy_io calibrate_imu test_imu_latency test_imu_fusion_latency test_motor_latency test_controller init em check_voltage libonnxruntime.so*
           cd ..
 
       - name: Create Release
@@ -105,6 +106,7 @@ jobs:
             - **test_controller**: Xbox controller input testing tool
             - **init**: Enable torque and move all motors to default pose
             - **em**: Emergency stop — disable motor torque
+            - **check_voltage**: Read present input voltage for all motors
             - **libonnxruntime.so**: ONNX Runtime library (required for policy inference)
 
             ### Installation
