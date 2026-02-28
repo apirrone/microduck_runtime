@@ -2,6 +2,7 @@
 
 Runtime for the Microduck robot. Runs on Raspberry Pi Zero 2W with 14 Dynamixel XL330 motors and a BNO055 IMU.
 
+Main repo : https://github.com/apirrone/microduck
 
 ## Install command
 
@@ -23,7 +24,10 @@ curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/inst
     - `sudo btmgmt privacy on`
     - `sudo btmgmt power on`
 - run `bluetoothctl`
-    - scan on    - pair <mac>    - connect <mac>    - trust <mac>
+    - scan on
+    - pair <mac>
+    - connect <mac>
+    - trust <mac>
 - run `test_controller`
 
 ## Recommended run command
