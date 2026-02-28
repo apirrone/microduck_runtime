@@ -12,7 +12,7 @@ curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/inst
 
 ## RPI setup
 - `scp rpi_setup/config.txt in /boot/firmware/`
-- `scp rpi_setip/.bashrc in ~/`
+- `scp rpi_setup/.bashrc in ~/`
 - run `sudo rpi-config`
     - interface
         - enable i2c
