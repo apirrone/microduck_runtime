@@ -6,11 +6,15 @@ pub const MAX_OBSERVATION_SIZE: usize = 56;
 
 /// Observation vector structure
 ///
-/// For velocity task (no imitation):
+/// New velocity task (no imitation, body_cmd=Some):
 /// Layout: [gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14), command(3), body_cmd(3)]
 /// Total: 54D
 ///
-/// For imitation task (with phase):
+/// Old velocity task (no imitation, body_cmd=None):
+/// Layout: [gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14), command(3)]
+/// Total: 51D
+///
+/// Imitation task (with phase):
 /// Layout: [command(3), phase(2), gyro(3), projected_gravity(3), joint_pos(14), joint_vel(14), last_action(14)]
 /// Total: 53D
 ///
@@ -21,7 +25,7 @@ pub const MAX_OBSERVATION_SIZE: usize = 56;
 /// - last_action: previous action outputs (rad offsets)
 /// - command: [lin_vel_x, lin_vel_y, ang_vel_z] velocity commands
 /// - phase: [cos(2π*phase), sin(2π*phase)] - optional imitation phase (2D)
-/// - body_cmd: normalized body pose commands [z/0.03, pitch/0.349, roll/0.349]
+/// - body_cmd: normalized body pose commands [z/0.03, pitch/0.349, roll/0.349] (new policies only)
 #[derive(Debug, Clone)]
 pub struct Observation {
     data: [f32; MAX_OBSERVATION_SIZE],
@@ -29,14 +33,15 @@ pub struct Observation {
 }
 
 impl Observation {
-    /// Create a new observation from sensor data
+    /// Create a new observation from sensor data.
+    /// Pass `body_cmd = Some(...)` for new 54D policies, `None` for old 51D policies.
     pub fn new(
         imu: &ImuData,
         command: &[f64; 3],
         motor_state: &MotorState,
         last_action: &[f32; NUM_MOTORS],
         phase: Option<f64>,
-        body_cmd: &[f32; 3],
+        body_cmd: Option<&[f32; 3]>,
     ) -> Self {
         let mut data = [0.0f32; MAX_OBSERVATION_SIZE];
         let mut idx = 0;
@@ -90,7 +95,7 @@ impl Observation {
             idx += 1;
         }
 
-        // For velocity task: command and body_cmd come LAST
+        // For velocity task: command (and optionally body_cmd) come LAST
         if phase.is_none() {
             // Velocity commands (3) - [lin_vel_x, lin_vel_y, ang_vel_z]
             for i in 0..3 {
@@ -99,14 +104,17 @@ impl Observation {
             }
 
             // Body pose commands (3) - normalized [z/0.03, pitch/0.349, roll/0.349]
-            for i in 0..3 {
-                data[idx] = body_cmd[i];
-                idx += 1;
+            // Only present in new 54D policies; old 51D policies omit this.
+            if let Some(bc) = body_cmd {
+                for i in 0..3 {
+                    data[idx] = bc[i];
+                    idx += 1;
+                }
             }
         }
 
         let size = idx;
-        assert!(size == 54 || size == 53, "Observation size must be 54 or 53, got {}", size);
+        assert!(size == 54 || size == 53 || size == 51, "Observation size must be 51, 53, or 54, got {}", size);
 
         Self { data, size }
     }
@@ -159,7 +167,7 @@ mod tests {
         let last_action = [0.0f32; NUM_MOTORS];
         let body_cmd = [0.5f32, -0.5, 0.25];
 
-        let obs = Observation::new(&imu, &command, &motor_state, &last_action, None, &body_cmd);
+        let obs = Observation::new(&imu, &command, &motor_state, &last_action, None, Some(&body_cmd));
         let slice = obs.as_slice();
 
         assert_eq!(obs.size(), 54);
@@ -186,6 +194,29 @@ mod tests {
     }
 
     #[test]
+    fn test_observation_old_policy() {
+        // Old 51D layout: no body_cmd (body_cmd = None)
+        let imu = ImuData {
+            gyro: [1.0, 2.0, 3.0],
+            accel: [4.0, 5.0, 6.0],
+        };
+        let command = [0.1, 0.2, 0.3];
+        let motor_state = MotorState::default();
+        let last_action = [0.0f32; NUM_MOTORS];
+
+        let obs = Observation::new(&imu, &command, &motor_state, &last_action, None, None);
+        assert_eq!(obs.size(), 51);
+        let slice = obs.as_slice();
+
+        // Check gyro
+        assert_eq!(slice[0], 1.0);
+        // Check command at end (3 + 3 + 14 + 14 + 14 = 48)
+        assert_eq!(slice[48], 0.1);
+        assert_eq!(slice[49], 0.2);
+        assert_eq!(slice[50], 0.3);
+    }
+
+    #[test]
     fn test_observation_with_phase() {
         use std::f64::consts::PI;
 
@@ -199,7 +230,7 @@ mod tests {
         let body_cmd = [0.0f32; 3];
 
         // Test with phase = 0.0 -> cos(0) = 1, sin(0) = 0
-        let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.0), &body_cmd);
+        let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.0), Some(&body_cmd));
         assert_eq!(obs.size(), 53);
         let slice = obs.as_slice();
 
@@ -211,14 +242,14 @@ mod tests {
         assert!(slice[4].abs() < 1e-5);  // sin(0) = 0
 
         // Test with phase = 0.25 -> cos(π/2) = 0, sin(π/2) = 1
-        let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.25), &body_cmd);
+        let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.25), Some(&body_cmd));
         assert_eq!(obs.size(), 53);
         let slice = obs.as_slice();
         assert!(slice[3].abs() < 1e-5);  // cos(π/2) ≈ 0
         assert!((slice[4] - 1.0).abs() < 1e-5);  // sin(π/2) ≈ 1
 
         // Test with phase = 0.5 -> cos(π) = -1, sin(π) = 0
-        let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.5), &body_cmd);
+        let obs = Observation::new(&imu, &command, &motor_state, &last_action, Some(0.5), Some(&body_cmd));
         assert_eq!(obs.size(), 53);
         let slice = obs.as_slice();
         assert!((slice[3] + 1.0).abs() < 1e-5);  // cos(π) ≈ -1

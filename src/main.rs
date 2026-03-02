@@ -137,6 +137,10 @@ struct Args {
     /// Maximum head/neck joint offset in head mode (radians)
     #[arg(long, default_value_t = 0.3)]
     head_max: f64,
+
+    /// Use old 51D observation layout (no body_cmd), for policies trained before body control
+    #[arg(long)]
+    old: bool,
 }
 
 
@@ -169,6 +173,7 @@ struct Runtime {
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
     head_max: f64,  // Max head offset in radians
     body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
+    old_policy: bool,  // Use 51D obs layout (no body_cmd) for older policies
     y_button_prev_state: bool,  // Track Y button state for edge detection
     fallen: bool,  // Whether the robot is currently detected as fallen
     fall_detected_since: Option<Instant>,  // When continuous fall detection started (for debounce)
@@ -287,7 +292,7 @@ impl Runtime {
                 .context(format!("Failed to create log file: {}", path))?;
 
             // Write CSV header: step, time, obs_0..obs_N, action_0..action_13
-            let obs_size = if args.imitation { 53 } else { 54 };
+            let obs_size = if args.imitation { 53 } else if args.old { 51 } else { 54 };
             write!(file, "step,time")?;
             for i in 0..obs_size {
                 write!(file, ",obs_{}", i)?;
@@ -332,6 +337,7 @@ impl Runtime {
             head_offsets: [0.0; 4],
             head_max: args.head_max,
             body_cmd: [0.0; 3],
+            old_policy: args.old,
             y_button_prev_state: false,
             fallen: false,
             fall_detected_since: None,
@@ -481,13 +487,15 @@ impl Runtime {
             None
         };
 
-        // Normalize body_cmd before inserting into observation
-        // Training uses max_z=0.03, max_angle=0.349 rad (20°)
+        // Normalize body_cmd before inserting into observation.
+        // Training uses max_z=0.03, max_angle=0.349 rad (20°).
+        // Old policies (51D) don't have body_cmd in their obs — pass None.
         let body_cmd_norm = [
             (self.body_cmd[0] / 0.03) as f32,
             (self.body_cmd[1] / 0.349) as f32,
             (self.body_cmd[2] / 0.349) as f32,
         ];
+        let body_cmd_arg = if self.old_policy { None } else { Some(&body_cmd_norm) };
 
         let observation = Observation::new(
             &imu_data,
@@ -495,7 +503,7 @@ impl Runtime {
             &motor_state,
             &self.last_action,
             phase,
-            &body_cmd_norm,
+            body_cmd_arg,
         );
 
         // Run policy inference (or hold default position if policy disabled)
