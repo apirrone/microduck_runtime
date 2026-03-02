@@ -121,7 +121,12 @@ impl Controller {
                     let button_name = format!("{:?}", button);
                     self.state.buttons.insert(button_name, false);
                 }
-                EventType::AxisChanged(axis, value, _) => {
+                EventType::AxisChanged(axis, value, code) => {
+                    // Xbox Wireless Controller on Linux reports triggers as Unknown axes
+                    // with evdev codes kind=3/code=9 (RT) and kind=3/code=10 (LT).
+                    // into_u32() = (kind << 16) | code
+                    const RT_CODE: u32 = (3 << 16) | 9;   // ABS_BRAKE
+                    const LT_CODE: u32 = (3 << 16) | 10;  // ABS_GAS
                     match axis {
                         Axis::LeftStickX => self.state.left_stick_y = value,
                         Axis::LeftStickY => self.state.left_stick_x = value,
@@ -131,6 +136,11 @@ impl Controller {
                         Axis::RightZ => self.state.right_trigger = (value + 1.0) / 2.0,
                         Axis::DPadX => self.state.dpad_x = value,
                         Axis::DPadY => self.state.dpad_y = value,
+                        Axis::Unknown => match code.into_u32() {
+                            RT_CODE => self.state.right_trigger = (value + 1.0) / 2.0,
+                            LT_CODE => self.state.left_trigger = (value + 1.0) / 2.0,
+                            _ => {}
+                        },
                         _ => {}
                     }
                 }
