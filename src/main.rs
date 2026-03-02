@@ -183,6 +183,7 @@ struct Runtime {
     fall_detected_since: Option<Instant>,  // When continuous fall detection started (for debounce)
     mouth_position: f64,  // Current mouth motor position in radians (0 to MOUTH_MAX_ANGLE)
     mouth_kp: u16,  // Position P gain for mouth motor
+    mouth_available: bool,  // Whether the mouth motor (ID 34) is connected
 }
 
 impl Runtime {
@@ -349,6 +350,7 @@ impl Runtime {
             fall_detected_since: None,
             mouth_position: 0.0,
             mouth_kp: args.mouth_kp,
+            mouth_available: false,
         })
     }
 
@@ -366,10 +368,16 @@ impl Runtime {
         self.motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
 
-        // Initialize mouth motor (ID 34) with its own kP (ki/kd same as other motors)
-        self.motor_controller.init_mouth_motor(self.mouth_kp, ki, kd)
-            .context("Failed to initialize mouth motor")?;
-        println!("✓ Mouth motor (ID 34) initialized (kP={})", self.mouth_kp);
+        // Initialize mouth motor (ID 34) — optional, continue if not connected
+        match self.motor_controller.init_mouth_motor(self.mouth_kp, ki, kd) {
+            Ok(()) => {
+                self.mouth_available = true;
+                println!("✓ Mouth motor (ID 34) initialized (kP={})", self.mouth_kp);
+            }
+            Err(e) => {
+                println!("⚠ Mouth motor (ID 34) not available, skipping: {}", e);
+            }
+        }
 
         println!("✓ Motors initialized with PID gains and torque enabled");
         Ok(())
@@ -582,8 +590,10 @@ impl Runtime {
         self.motor_controller.write_goal_positions(&motor_targets)
             .context("Failed to write motor positions")?;
 
-        self.motor_controller.write_mouth_position(self.mouth_position)
-            .context("Failed to write mouth position")?;
+        if self.mouth_available {
+            self.motor_controller.write_mouth_position(self.mouth_position)
+                .context("Failed to write mouth position")?;
+        }
 
         // Update last action
         self.last_action = action;
