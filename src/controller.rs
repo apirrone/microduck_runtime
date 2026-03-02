@@ -127,8 +127,8 @@ impl Controller {
                         Axis::LeftStickY => self.state.left_stick_x = value,
                         Axis::RightStickX => self.state.right_stick_x = value,
                         Axis::RightStickY => self.state.right_stick_y = value,
-                        Axis::LeftZ => self.state.right_stick_y = value,
-                        Axis::RightZ => self.state.right_stick_x = -value,
+                        Axis::LeftZ => self.state.left_trigger = (value + 1.0) / 2.0,
+                        Axis::RightZ => self.state.right_trigger = (value + 1.0) / 2.0,
                         Axis::DPadX => self.state.dpad_x = value,
                         Axis::DPadY => self.state.dpad_y = value,
                         _ => {}
