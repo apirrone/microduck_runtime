@@ -10,6 +10,12 @@ const USE_BULK_READ: bool = true;
 /// Number of motors on the microduck robot
 pub const NUM_MOTORS: usize = 14;
 
+/// Mouth motor ID (independent from policy)
+pub const MOUTH_MOTOR_ID: u8 = 34;
+
+/// Mouth motor range: 0° to 170°
+pub const MOUTH_MAX_ANGLE: f64 = 170.0 * PI / 180.0;
+
 /// Motor IDs in order: left leg (5), neck/head (4), right leg (5)
 /// This order matches the observation/action vector indices
 pub const MOTOR_IDS: [u8; NUM_MOTORS] = [
@@ -216,6 +222,31 @@ impl MotorController {
             voltages[i] = v as f32 * 0.1;
         }
         Ok(voltages)
+    }
+
+    /// Initialize the mouth motor: enable torque and set PID gains
+    pub fn init_mouth_motor(&mut self, kp: u16, ki: u16, kd: u16) -> Result<()> {
+        self.controller
+            .write_torque_enable(MOUTH_MOTOR_ID, true)
+            .map_err(|e| anyhow::anyhow!("Failed to enable torque for mouth motor: {}", e))?;
+        self.controller
+            .write_position_p_gain(MOUTH_MOTOR_ID, kp)
+            .map_err(|e| anyhow::anyhow!("Failed to set P gain for mouth motor: {}", e))?;
+        self.controller
+            .write_position_i_gain(MOUTH_MOTOR_ID, ki)
+            .map_err(|e| anyhow::anyhow!("Failed to set I gain for mouth motor: {}", e))?;
+        self.controller
+            .write_position_d_gain(MOUTH_MOTOR_ID, kd)
+            .map_err(|e| anyhow::anyhow!("Failed to set D gain for mouth motor: {}", e))?;
+        Ok(())
+    }
+
+    /// Write goal position for the mouth motor (in radians)
+    pub fn write_mouth_position(&mut self, pos_rad: f64) -> Result<()> {
+        self.controller
+            .sync_write_goal_position(&[MOUTH_MOTOR_ID], &[pos_rad])
+            .map_err(|e| anyhow::anyhow!("Failed to write mouth position: {}", e))?;
+        Ok(())
     }
 
     /// Set PID gains for all motors

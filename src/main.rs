@@ -7,7 +7,7 @@ mod controller;
 use anyhow::{Context, Result};
 use clap::Parser;
 use imu::ImuController;
-use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION};
+use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MAX_ANGLE};
 use observation::Observation;
 use policy::Policy;
 use controller::Controller;
@@ -177,6 +177,7 @@ struct Runtime {
     y_button_prev_state: bool,  // Track Y button state for edge detection
     fallen: bool,  // Whether the robot is currently detected as fallen
     fall_detected_since: Option<Instant>,  // When continuous fall detection started (for debounce)
+    mouth_position: f64,  // Current mouth motor position in radians (0 to MOUTH_MAX_ANGLE)
 }
 
 impl Runtime {
@@ -341,6 +342,7 @@ impl Runtime {
             y_button_prev_state: false,
             fallen: false,
             fall_detected_since: None,
+            mouth_position: 0.0,
         })
     }
 
@@ -357,6 +359,11 @@ impl Runtime {
         // Enable torque on all motors
         self.motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
+
+        // Initialize mouth motor (ID 34) with same PID gains
+        self.motor_controller.init_mouth_motor(kp, ki, kd)
+            .context("Failed to initialize mouth motor")?;
+        println!("✓ Mouth motor (ID 34) initialized");
 
         println!("✓ Motors initialized with PID gains and torque enabled");
         Ok(())
@@ -407,6 +414,9 @@ impl Runtime {
                 self.command[1] = -left_y as f64 * self.max_linear_vel;
                 self.command[2] = -right_y as f64 * 1.5 * self.max_angular_vel;
             }
+
+            // Right trigger controls mouth (0 → 0°, 1 → 170°), independent from policy
+            self.mouth_position = state.right_trigger as f64 * MOUTH_MAX_ANGLE;
 
             // Handle Start button to toggle policy inference (or recover from fall)
             let start_pressed = controller.is_button_pressed("Start");
@@ -565,6 +575,9 @@ impl Runtime {
 
         self.motor_controller.write_goal_positions(&motor_targets)
             .context("Failed to write motor positions")?;
+
+        self.motor_controller.write_mouth_position(self.mouth_position)
+            .context("Failed to write mouth position")?;
 
         // Update last action
         self.last_action = action;
