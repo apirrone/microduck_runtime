@@ -70,6 +70,7 @@ These commands are available after installing with the curl command :
 | `check_voltage` | Check power supply voltage |
 | `calibrate_imu` | Calibrate the IMU and save calibration to file |
 | `test_controller` | Test gamepad input with a visual bar display |
+| `test_controller_raw` | Dump raw gilrs events from the gamepad (useful for debugging axis/button mappings) |
 | `test_imu` | Verify BNO055 IMU is working |
 | `test_imu2` | Low-level I2C IMU acceleration data reading test |
 | `test_imu3` | BNO055 IMU test with hardware axis remapping |
