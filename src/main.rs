@@ -168,6 +168,7 @@ struct Runtime {
     head_mode: bool,  // Head control mode (Y button)
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
     head_max: f64,  // Max head offset in radians
+    body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
     y_button_prev_state: bool,  // Track Y button state for edge detection
     fallen: bool,  // Whether the robot is currently detected as fallen
     fall_detected_since: Option<Instant>,  // When continuous fall detection started (for debounce)
@@ -286,7 +287,7 @@ impl Runtime {
                 .context(format!("Failed to create log file: {}", path))?;
 
             // Write CSV header: step, time, obs_0..obs_N, action_0..action_13
-            let obs_size = if args.imitation { 53 } else { 51 };
+            let obs_size = if args.imitation { 53 } else { 54 };
             write!(file, "step,time")?;
             for i in 0..obs_size {
                 write!(file, ",obs_{}", i)?;
@@ -330,6 +331,7 @@ impl Runtime {
             head_mode: false,
             head_offsets: [0.0; 4],
             head_max: args.head_max,
+            body_cmd: [0.0; 3],
             y_button_prev_state: false,
             fallen: false,
             fall_detected_since: None,
@@ -479,12 +481,21 @@ impl Runtime {
             None
         };
 
+        // Normalize body_cmd before inserting into observation
+        // Training uses max_z=0.03, max_angle=0.349 rad (20°)
+        let body_cmd_norm = [
+            (self.body_cmd[0] / 0.03) as f32,
+            (self.body_cmd[1] / 0.349) as f32,
+            (self.body_cmd[2] / 0.349) as f32,
+        ];
+
         let observation = Observation::new(
             &imu_data,
             &self.command,
             &motor_state,
             &self.last_action,
             phase,
+            &body_cmd_norm,
         );
 
         // Run policy inference (or hold default position if policy disabled)
