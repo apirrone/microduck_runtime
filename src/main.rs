@@ -138,6 +138,10 @@ struct Args {
     #[arg(long, default_value_t = 0.3)]
     head_max: f64,
 
+    /// Position P gain for mouth motor (ID 34)
+    #[arg(long, default_value_t = 400)]
+    mouth_kp: u16,
+
     /// Use old 51D observation layout (no body_cmd), for policies trained before body control
     #[arg(long)]
     old: bool,
@@ -178,6 +182,7 @@ struct Runtime {
     fallen: bool,  // Whether the robot is currently detected as fallen
     fall_detected_since: Option<Instant>,  // When continuous fall detection started (for debounce)
     mouth_position: f64,  // Current mouth motor position in radians (0 to MOUTH_MAX_ANGLE)
+    mouth_kp: u16,  // Position P gain for mouth motor
 }
 
 impl Runtime {
@@ -343,6 +348,7 @@ impl Runtime {
             fallen: false,
             fall_detected_since: None,
             mouth_position: 0.0,
+            mouth_kp: args.mouth_kp,
         })
     }
 
@@ -360,10 +366,10 @@ impl Runtime {
         self.motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
 
-        // Initialize mouth motor (ID 34) with same PID gains
-        self.motor_controller.init_mouth_motor(kp, ki, kd)
+        // Initialize mouth motor (ID 34) with its own kP (ki/kd same as other motors)
+        self.motor_controller.init_mouth_motor(self.mouth_kp, ki, kd)
             .context("Failed to initialize mouth motor")?;
-        println!("✓ Mouth motor (ID 34) initialized");
+        println!("✓ Mouth motor (ID 34) initialized (kP={})", self.mouth_kp);
 
         println!("✓ Motors initialized with PID gains and torque enabled");
         Ok(())
