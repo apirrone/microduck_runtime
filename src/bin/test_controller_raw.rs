@@ -17,17 +17,17 @@ fn main() -> Result<()> {
     loop {
         while let Some(Event { id, event, time: _ }) = gilrs.next_event() {
             match &event {
-                EventType::AxisChanged(axis, value, _) => {
-                    println!("[{:?}] AxisChanged:   {:?} = {:.4}", id, axis, value);
+                EventType::AxisChanged(axis, value, code) => {
+                    println!("[{:?}] AxisChanged:   {:?} (code={:?}) = {:.4}", id, axis, code, value);
                 }
-                EventType::ButtonChanged(button, value, _) => {
-                    println!("[{:?}] ButtonChanged: {:?} = {:.4}", id, button, value);
+                EventType::ButtonChanged(button, value, code) => {
+                    println!("[{:?}] ButtonChanged: {:?} (code={:?}) = {:.4}", id, button, code, value);
                 }
-                EventType::ButtonPressed(button, _) => {
-                    println!("[{:?}] ButtonPressed: {:?}", id, button);
+                EventType::ButtonPressed(button, code) => {
+                    println!("[{:?}] ButtonPressed: {:?} (code={:?})", id, button, code);
                 }
-                EventType::ButtonReleased(button, _) => {
-                    println!("[{:?}] ButtonReleased: {:?}", id, button);
+                EventType::ButtonReleased(button, code) => {
+                    println!("[{:?}] ButtonReleased: {:?} (code={:?})", id, button, code);
                 }
                 EventType::Connected => {
                     println!("[{:?}] Connected", id);
