@@ -138,6 +138,10 @@ struct Args {
     #[arg(long, default_value_t = 0.3)]
     head_max: f64,
 
+    /// Smoothing factor for head commands (0.0=no movement, 1.0=no smoothing)
+    #[arg(long, default_value_t = 0.1)]
+    head_alpha: f64,
+
     /// Position P gain for mouth motor (ID 34)
     #[arg(long, default_value_t = 400)]
     mouth_kp: u16,
@@ -176,6 +180,7 @@ struct Runtime {
     head_mode: bool,  // Head control mode (Y button)
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
     head_max: f64,  // Max head offset in radians
+    head_alpha: f64,  // EMA smoothing factor for head commands (0=still, 1=no smoothing)
     body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
     old_policy: bool,  // Use 51D obs layout (no body_cmd) for older policies
     y_button_prev_state: bool,  // Track Y button state for edge detection
@@ -343,6 +348,7 @@ impl Runtime {
             head_mode: false,
             head_offsets: [0.0; 4],
             head_max: args.head_max,
+            head_alpha: args.head_alpha,
             body_cmd: [0.0; 3],
             old_policy: args.old,
             y_button_prev_state: false,
@@ -414,10 +420,16 @@ impl Runtime {
             if self.head_mode {
                 // Head mode: joysticks control neck/head joint offsets
                 // [neck_pitch, head_pitch, head_yaw, head_roll] → motor indices [5, 6, 7, 8]
-                self.head_offsets[1] = left_x as f64 * self.head_max;   // head_pitch (L stick up/down)
-                self.head_offsets[2] = left_y as f64 * self.head_max;   // head_yaw   (L stick left/right)
-                self.head_offsets[3] = right_y as f64 * self.head_max;  // head_roll  (R stick left/right)
-                self.head_offsets[0] = right_x as f64 * self.head_max;  // neck_pitch (R stick up/down)
+                // EMA smoothing: offset += alpha * (target - offset)
+                let targets = [
+                    right_x as f64 * self.head_max,  // neck_pitch (R stick up/down)
+                    left_x as f64 * self.head_max,   // head_pitch (L stick up/down)
+                    left_y as f64 * self.head_max,   // head_yaw   (L stick left/right)
+                    right_y as f64 * self.head_max,  // head_roll  (R stick left/right)
+                ];
+                for i in 0..4 {
+                    self.head_offsets[i] += self.head_alpha * (targets[i] - self.head_offsets[i]);
+                }
                 self.command = [0.0; 3];
             } else {
                 // Normal mode: joysticks control velocity commands
