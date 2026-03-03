@@ -13,8 +13,8 @@ pub const NUM_MOTORS: usize = 14;
 /// Mouth motor ID (independent from policy)
 pub const MOUTH_MOTOR_ID: u8 = 34;
 
-/// Mouth motor range: 0° to 170°
-pub const MOUTH_MAX_ANGLE: f64 = 170.0 * PI / 180.0;
+/// Mouth motor range: 0° to 120°
+pub const MOUTH_MAX_ANGLE: f64 = 120.0 * PI / 180.0;
 
 /// Motor IDs in order: left leg (5), neck/head (4), right leg (5)
 /// This order matches the observation/action vector indices
