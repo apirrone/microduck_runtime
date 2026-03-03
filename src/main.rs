@@ -139,7 +139,7 @@ struct Args {
     head_max: f64,
 
     /// Smoothing factor for head commands (0.0=no movement, 1.0=no smoothing)
-    #[arg(long, default_value_t = 0.1)]
+    #[arg(long, default_value_t = 0.2)]
     head_alpha: f64,
 
     /// Position P gain for mouth motor (ID 34)

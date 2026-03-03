@@ -45,8 +45,8 @@ pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [
     -1.2, // left_knee
     0.6, // left_ankle (was 0.5 - FIXED to match training)
 
-    0.0, // neck_pitch
-    0.0, // head_pitch
+    -0.5, // neck_pitch
+    0.5, // head_pitch
     0.0, // head_yaw
     0.0, // head_roll
 
