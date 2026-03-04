@@ -161,6 +161,10 @@ struct Args {
     /// Duration of one ground pick cycle in seconds
     #[arg(long, default_value_t = 4.0)]
     ground_pick_period: f64,
+
+    /// Action scale to use during ground pick (overrides --action-scale for the duration)
+    #[arg(long, default_value_t = 1.0)]
+    ground_pick_action_scale: f64,
 }
 
 
@@ -206,6 +210,8 @@ struct Runtime {
     ground_pick_active: bool,
     ground_pick_phase: f64,
     ground_pick_period: f64,
+    ground_pick_action_scale: f64,
+    prev_action_scale: f64,
     a_button_prev_state: bool,
 }
 
@@ -387,6 +393,8 @@ impl Runtime {
             ground_pick_active: false,
             ground_pick_phase: 0.0,
             ground_pick_period: args.ground_pick_period,
+            ground_pick_action_scale: args.ground_pick_action_scale,
+            prev_action_scale: args.action_scale,
             a_button_prev_state: false,
         })
     }
@@ -454,7 +462,9 @@ impl Runtime {
                 self.ground_pick_active = true;
                 self.ground_pick_phase = 0.0;
                 self.policy.set_ground_pick_active(true);
-                println!("▼ Ground pick: started (period={:.1}s)", self.ground_pick_period);
+                self.prev_action_scale = self.action_scale;
+                self.action_scale = self.ground_pick_action_scale;
+                println!("▼ Ground pick: started (period={:.1}s, action_scale={:.2})", self.ground_pick_period, self.action_scale);
             }
             self.a_button_prev_state = a_pressed;
 
@@ -675,7 +685,8 @@ impl Runtime {
                 self.ground_pick_active = false;
                 self.ground_pick_phase = 0.0;
                 self.policy.set_ground_pick_active(false);
-                println!("▲ Ground pick: done, returning to walking");
+                self.action_scale = self.prev_action_scale;
+                println!("▲ Ground pick: done, returning to walking (action_scale restored to {:.2})", self.action_scale);
             }
         }
 
