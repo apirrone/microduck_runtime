@@ -165,6 +165,10 @@ struct Args {
     /// Action scale to use during ground pick (overrides --action-scale for the duration)
     #[arg(long, default_value_t = 1.0)]
     ground_pick_action_scale: f64,
+
+    /// kP multiplier applied to all motors during ground pick (e.g. 0.6 = 40% reduction)
+    #[arg(long, default_value_t = 0.6)]
+    ground_pick_kp_ratio: f64,
 }
 
 
@@ -211,6 +215,7 @@ struct Runtime {
     ground_pick_phase: f64,
     ground_pick_period: f64,
     ground_pick_action_scale: f64,
+    ground_pick_kp_ratio: f64,
     prev_action_scale: f64,
     a_button_prev_state: bool,
 }
@@ -394,6 +399,7 @@ impl Runtime {
             ground_pick_phase: 0.0,
             ground_pick_period: args.ground_pick_period,
             ground_pick_action_scale: args.ground_pick_action_scale,
+            ground_pick_kp_ratio: args.ground_pick_kp_ratio,
             prev_action_scale: args.action_scale,
             a_button_prev_state: false,
         })
@@ -464,7 +470,11 @@ impl Runtime {
                 self.policy.set_ground_pick_active(true);
                 self.prev_action_scale = self.action_scale;
                 self.action_scale = self.ground_pick_action_scale;
-                println!("▼ Ground pick: started (period={:.1}s, action_scale={:.2})", self.ground_pick_period, self.action_scale);
+                let (kp, ki, kd) = self.pid_gains;
+                let gp_kp = (kp as f64 * self.ground_pick_kp_ratio).round() as u16;
+                self.motor_controller.set_pid_gains(gp_kp, ki, kd)
+                    .context("Failed to set ground pick PID gains")?;
+                println!("▼ Ground pick: started (period={:.1}s, action_scale={:.2}, kP={} → {})", self.ground_pick_period, self.action_scale, kp, gp_kp);
             }
             self.a_button_prev_state = a_pressed;
 
@@ -686,7 +696,10 @@ impl Runtime {
                 self.ground_pick_phase = 0.0;
                 self.policy.set_ground_pick_active(false);
                 self.action_scale = self.prev_action_scale;
-                println!("▲ Ground pick: done, returning to walking (action_scale restored to {:.2})", self.action_scale);
+                let (kp, ki, kd) = self.pid_gains;
+                self.motor_controller.set_pid_gains(kp, ki, kd)
+                    .context("Failed to restore PID gains after ground pick")?;
+                println!("▲ Ground pick: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
             }
         }
 
