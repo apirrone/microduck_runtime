@@ -498,7 +498,7 @@ impl Runtime {
                 }
             }
 
-            // Right trigger controls mouth (0 → -5°, 1 → 70°), independent from policy
+            // Right trigger controls mouth (0 → -10°, 1 → 70°), independent from policy
             self.mouth_position = MOUTH_MIN_ANGLE + state.right_trigger as f64 * (MOUTH_MAX_ANGLE - MOUTH_MIN_ANGLE);
 
             // Handle Start button to toggle policy inference (or recover from fall)
