@@ -142,6 +142,10 @@ struct Args {
     #[arg(long, default_value_t = 0.2)]
     head_alpha: f64,
 
+    /// Smoothing factor for velocity commands (0.0=no movement, 1.0=no smoothing)
+    #[arg(long, default_value_t = 0.2)]
+    cmd_alpha: f64,
+
     /// Position P gain for mouth motor (ID 34)
     #[arg(long, default_value_t = 400)]
     mouth_kp: u16,
@@ -181,6 +185,7 @@ struct Runtime {
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
     head_max: f64,  // Max head offset in radians
     head_alpha: f64,  // EMA smoothing factor for head commands (0=still, 1=no smoothing)
+    cmd_alpha: f64,   // EMA smoothing factor for velocity commands (0=still, 1=no smoothing)
     body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
     old_policy: bool,  // Use 51D obs layout (no body_cmd) for older policies
     y_button_prev_state: bool,  // Track Y button state for edge detection
@@ -349,6 +354,7 @@ impl Runtime {
             head_offsets: [0.0; 4],
             head_max: args.head_max,
             head_alpha: args.head_alpha,
+            cmd_alpha: args.cmd_alpha,
             body_cmd: [0.0; 3],
             old_policy: args.old,
             y_button_prev_state: false,
@@ -436,9 +442,15 @@ impl Runtime {
                 // - Left stick X (up/down) → vel_x forward/backward
                 // - Left stick Y (left/right) → vel_y strafe
                 // - Right stick Y (left/right) → vel_z turn
-                self.command[0] = left_x as f64 * self.max_linear_vel;
-                self.command[1] = -left_y as f64 * self.max_linear_vel;
-                self.command[2] = -right_y as f64 * 1.5 * self.max_angular_vel;
+                // EMA smoothing: cmd += alpha * (target - cmd)
+                let target_cmd = [
+                    left_x as f64 * self.max_linear_vel,
+                    -left_y as f64 * self.max_linear_vel,
+                    -right_y as f64 * 1.5 * self.max_angular_vel,
+                ];
+                for i in 0..3 {
+                    self.command[i] += self.cmd_alpha * (target_cmd[i] - self.command[i]);
+                }
             }
 
             // Right trigger controls mouth (0 → 0°, 1 → 120°), independent from policy
