@@ -153,6 +153,14 @@ struct Args {
     /// Use old 51D observation layout (no body_cmd), for policies trained before body control
     #[arg(long)]
     old: bool,
+
+    /// Path to ground pick policy ONNX model file (enables A button one-shot ground pick)
+    #[arg(long)]
+    ground_pick: Option<String>,
+
+    /// Duration of one ground pick cycle in seconds
+    #[arg(long, default_value_t = 4.0)]
+    ground_pick_period: f64,
 }
 
 
@@ -194,6 +202,11 @@ struct Runtime {
     mouth_position: f64,  // Current mouth motor position in radians (0 to MOUTH_MAX_ANGLE)
     mouth_kp: u16,  // Position P gain for mouth motor
     mouth_available: bool,  // Whether the mouth motor (ID 34) is connected
+    // Ground pick
+    ground_pick_active: bool,
+    ground_pick_phase: f64,
+    ground_pick_period: f64,
+    a_button_prev_state: bool,
 }
 
 impl Runtime {
@@ -226,7 +239,7 @@ impl Runtime {
         }
 
         // Initialize policy based on arguments
-        let policy = if args.dummy {
+        let mut policy = if args.dummy {
             println!("✓ Using dummy policy (always outputs zeros)");
             Policy::new_dummy().context("Failed to create dummy policy")?
         } else if let Some(ref walking_path) = args.model {
@@ -244,6 +257,14 @@ impl Runtime {
             println!("! No policy specified, using dummy policy");
             Policy::new_dummy().context("Failed to create dummy policy")?
         };
+
+        // Load ground pick model if specified
+        if let Some(ref gp_path) = args.ground_pick {
+            println!("✓ Loading ground pick ONNX model from: {}", gp_path);
+            policy.add_ground_pick(gp_path)
+                .context("Failed to load ground pick ONNX model")?;
+            println!("  Ground pick period: {:.2}s (A button to trigger)", args.ground_pick_period);
+        }
 
         if args.pitch_offset != 0.0 {
             println!("⚠  Using pitch offset: {:.4} rad ({:.2}°)", args.pitch_offset, args.pitch_offset.to_degrees());
@@ -363,6 +384,10 @@ impl Runtime {
             mouth_position: 0.0,
             mouth_kp: args.mouth_kp,
             mouth_available: false,
+            ground_pick_active: false,
+            ground_pick_phase: 0.0,
+            ground_pick_period: args.ground_pick_period,
+            a_button_prev_state: false,
         })
     }
 
@@ -422,6 +447,16 @@ impl Runtime {
                 }
             }
             self.y_button_prev_state = y_pressed;
+
+            // Handle A button (South) to trigger one ground pick cycle
+            let a_pressed = controller.is_button_pressed("South");
+            if a_pressed && !self.a_button_prev_state && self.policy.has_ground_pick() && !self.ground_pick_active {
+                self.ground_pick_active = true;
+                self.ground_pick_phase = 0.0;
+                self.policy.set_ground_pick_active(true);
+                println!("▼ Ground pick: started (period={:.1}s)", self.ground_pick_period);
+            }
+            self.a_button_prev_state = a_pressed;
 
             if self.head_mode {
                 // Head mode: joysticks control neck/head joint offsets
@@ -545,18 +580,28 @@ impl Runtime {
         ];
         let body_cmd_arg = if self.old_policy { None } else { Some(&body_cmd_norm) };
 
+        // Ground pick: override command with phase encoding [cos, sin, 0] and use 51D obs
+        let gp_cmd;
+        let (effective_command, effective_body_cmd) = if self.ground_pick_active {
+            let angle = 2.0 * std::f64::consts::PI * self.ground_pick_phase;
+            gp_cmd = [angle.cos(), angle.sin(), 0.0];
+            (&gp_cmd, None)  // Ground pick policy uses 51D obs (no body_cmd)
+        } else {
+            (&self.command, body_cmd_arg)
+        };
+
         let observation = Observation::new(
             &imu_data,
-            &self.command,
+            effective_command,
             &motor_state,
             &self.last_action,
             phase,
-            body_cmd_arg,
+            effective_body_cmd,
         );
 
         // Run policy inference (or hold default position if policy disabled)
         let action = if self.policy_enabled {
-            self.policy.infer(&observation, &self.command)
+            self.policy.infer(&observation, effective_command)
                 .context("Failed to run policy inference")?
         } else {
             // During standby, use zero actions (hold default position)
@@ -621,6 +666,18 @@ impl Runtime {
 
         // Update last action
         self.last_action = action;
+
+        // Advance ground pick phase; end cycle when complete
+        if self.ground_pick_active {
+            let dt = 1.0 / self.control_freq as f64;
+            self.ground_pick_phase += dt / self.ground_pick_period;
+            if self.ground_pick_phase >= 0.7 {
+                self.ground_pick_active = false;
+                self.ground_pick_phase = 0.0;
+                self.policy.set_ground_pick_active(false);
+                println!("▲ Ground pick: done, returning to walking");
+            }
+        }
 
         // Update phase for next step
         if self.use_imitation {

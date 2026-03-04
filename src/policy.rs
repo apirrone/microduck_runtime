@@ -17,6 +17,8 @@ pub enum PolicyMode {
 pub struct Policy {
     mode: PolicyMode,
     standing_mode: Option<PolicyMode>,
+    ground_pick_mode: Option<PolicyMode>,
+    ground_pick_active: bool,
     start_time: Instant,
     command_threshold: f64,
     /// Gait period from ONNX metadata (if available)
@@ -57,6 +59,8 @@ impl Policy {
         Ok(Self {
             mode: PolicyMode::Dummy,
             standing_mode: None,
+            ground_pick_mode: None,
+            ground_pick_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
             gait_period: None,
@@ -79,6 +83,8 @@ impl Policy {
         Ok(Self {
             mode: PolicyMode::Onnx(session),
             standing_mode: None,
+            ground_pick_mode: None,
+            ground_pick_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
             gait_period,
@@ -107,10 +113,32 @@ impl Policy {
         Ok(Self {
             mode: PolicyMode::Onnx(walking_session),
             standing_mode: Some(PolicyMode::Onnx(standing_session)),
+            ground_pick_mode: None,
+            ground_pick_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
             gait_period,
         })
+    }
+
+    /// Load a ground pick policy from an ONNX model file
+    pub fn add_ground_pick(&mut self, path: &str) -> Result<()> {
+        let session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(2)?
+            .commit_from_file(path)?;
+        self.ground_pick_mode = Some(PolicyMode::Onnx(session));
+        Ok(())
+    }
+
+    /// Activate or deactivate ground pick mode
+    pub fn set_ground_pick_active(&mut self, active: bool) {
+        self.ground_pick_active = active;
+    }
+
+    /// Whether a ground pick policy is loaded
+    pub fn has_ground_pick(&self) -> bool {
+        self.ground_pick_mode.is_some()
     }
 
     /// Calculate command magnitude
@@ -132,6 +160,13 @@ impl Policy {
     /// # Returns
     /// Action vector (14 dimensions) for motor position offsets
     pub fn infer(&mut self, observation: &Observation, command: &[f64; 3]) -> Result<[f32; NUM_MOTORS]> {
+        // Ground pick takes priority when active
+        if self.ground_pick_active {
+            if let Some(ref mut gp_mode) = self.ground_pick_mode {
+                return Self::run_mode(gp_mode, observation, self.start_time);
+            }
+        }
+
         // Determine which policy to use based on command magnitude
         let use_standing = if self.standing_mode.is_some() {
             Self::command_magnitude(command) <= self.command_threshold
@@ -145,11 +180,15 @@ impl Policy {
             &mut self.mode
         };
 
+        Self::run_mode(policy_mode, observation, self.start_time)
+    }
+
+    fn run_mode(policy_mode: &mut PolicyMode, observation: &Observation, start_time: Instant) -> Result<[f32; NUM_MOTORS]> {
         match policy_mode {
             PolicyMode::Dummy => {
                 // Dummy policy: generate squatting motion
                 // Frequency: 0.5 Hz, Amplitude: 0.2 rad (hip_pitch, ankle), 0.4 rad (knee)
-                let elapsed = self.start_time.elapsed().as_secs_f32();
+                let elapsed = start_time.elapsed().as_secs_f32();
                 let freq = 0.5; // Hz
                 let amplitude = 0.2; // radians
                 let knee_amplitude = 0.4; // 2x amplitude for knees
