@@ -7,7 +7,7 @@ mod controller;
 use anyhow::{Context, Result};
 use clap::Parser;
 use imu::ImuController;
-use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MAX_ANGLE};
+use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE};
 use observation::Observation;
 use policy::Policy;
 use controller::Controller;
@@ -387,7 +387,7 @@ impl Runtime {
             y_button_prev_state: false,
             fallen: false,
             fall_detected_since: None,
-            mouth_position: 0.0,
+            mouth_position: MOUTH_MIN_ANGLE,
             mouth_kp: args.mouth_kp,
             mouth_available: false,
             ground_pick_active: false,
@@ -498,8 +498,8 @@ impl Runtime {
                 }
             }
 
-            // Right trigger controls mouth (0 → 0°, 1 → 70°), independent from policy
-            self.mouth_position = state.right_trigger as f64 * MOUTH_MAX_ANGLE;
+            // Right trigger controls mouth (0 → -5°, 1 → 70°), independent from policy
+            self.mouth_position = MOUTH_MIN_ANGLE + state.right_trigger as f64 * (MOUTH_MAX_ANGLE - MOUTH_MIN_ANGLE);
 
             // Handle Start button to toggle policy inference (or recover from fall)
             let start_pressed = controller.is_button_pressed("Start");
