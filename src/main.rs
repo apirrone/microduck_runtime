@@ -218,6 +218,10 @@ struct Runtime {
     ground_pick_kp_ratio: f64,
     prev_action_scale: f64,
     a_button_prev_state: bool,
+    // Standing policy
+    has_standing_policy: bool,
+    is_using_standing: bool,
+    standing_prev_action_scale: f64,
 }
 
 impl Runtime {
@@ -402,6 +406,9 @@ impl Runtime {
             ground_pick_kp_ratio: args.ground_pick_kp_ratio,
             prev_action_scale: args.action_scale,
             a_button_prev_state: false,
+            has_standing_policy: args.standing.is_some(),
+            is_using_standing: false,
+            standing_prev_action_scale: args.action_scale,
         })
     }
 
@@ -563,7 +570,8 @@ impl Runtime {
         // Fall detection: accel is projected gravity from quaternion (no walking dynamics).
         // When upright accel[2] ≈ -1.0; above -0.5 means >60° tilt.
         // Debounce: only trigger after 0.2s of continuous detection.
-        if !self.fallen {
+        // Skipped when a standing policy is provided (it handles standup autonomously).
+        if !self.has_standing_policy && !self.fallen {
             if imu_data.accel[2] > -0.5 {
                 let since = self.fall_detected_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= Duration::from_millis(200) {
@@ -609,6 +617,28 @@ impl Runtime {
         } else {
             (&self.command, body_cmd_arg)
         };
+
+        // Standing policy transitions: apply action_scale=1 and kp=60% when switching to standing
+        if !self.ground_pick_active {
+            let will_stand = self.policy.will_use_standing(effective_command);
+            if will_stand && !self.is_using_standing {
+                self.is_using_standing = true;
+                self.standing_prev_action_scale = self.action_scale;
+                self.action_scale = 1.0;
+                let (kp, ki, kd) = self.pid_gains;
+                let standing_kp = (kp as f64 * 0.6).round() as u16;
+                self.motor_controller.set_pid_gains(standing_kp, ki, kd)
+                    .context("Failed to set standing PID gains")?;
+                println!("^ Standing mode: kP={} -> {} (60%), action_scale=1.0", kp, standing_kp);
+            } else if !will_stand && self.is_using_standing {
+                self.is_using_standing = false;
+                self.action_scale = self.standing_prev_action_scale;
+                let (kp, ki, kd) = self.pid_gains;
+                self.motor_controller.set_pid_gains(kp, ki, kd)
+                    .context("Failed to restore PID gains after standing")?;
+                println!("v Walking mode: kP restored to {}, action_scale={:.2}", kp, self.action_scale);
+            }
+        }
 
         let observation = Observation::new(
             &imu_data,

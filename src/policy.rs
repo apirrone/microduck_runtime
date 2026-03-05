@@ -151,6 +151,11 @@ impl Policy {
         self.gait_period
     }
 
+    /// Returns true if the standing policy would be selected for the given command
+    pub fn will_use_standing(&self, command: &[f64; 3]) -> bool {
+        self.standing_mode.is_some() && Self::command_magnitude(command) <= self.command_threshold
+    }
+
     /// Run inference on an observation to get actions
     ///
     /// # Arguments
