@@ -44,11 +44,11 @@ struct Args {
     dummy: bool,
 
     /// Path to ONNX model file (ignored if --dummy is set)
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "~/microduck/policies/walking.onnx")]
     model: Option<String>,
 
     /// Path to standing policy ONNX model file (optional)
-    #[arg(short, long)]
+    #[arg(short, long, default_value = "~/microduck/policies/standing_body_control.onnx")]
     standing: Option<String>,
 
     /// Position P gain for motors
@@ -139,7 +139,7 @@ struct Args {
     mouth_kp: u16,
 
     /// Path to ground pick policy ONNX model file (enables A button one-shot ground pick)
-    #[arg(long)]
+    #[arg(long, default_value = "~/microduck/policies/ground_pick.onnx")]
     ground_pick: Option<String>,
 
     /// Duration of one ground pick cycle in seconds
@@ -878,7 +878,14 @@ async fn main() -> Result<()> {
     println!("=== Microduck Robot Runtime ===\n");
 
     // Parse command line arguments
-    let args = Args::parse();
+    let mut args = Args::parse();
+
+    // Expand ~ in path arguments (clap default_value doesn't get shell expansion)
+    let home = std::env::var("HOME").unwrap_or_default();
+    let expand = |p: Option<String>| p.map(|s| if s.starts_with("~/") { format!("{}/{}", home, &s[2..]) } else { s });
+    args.model = expand(args.model);
+    args.standing = expand(args.standing);
+    args.ground_pick = expand(args.ground_pick);
 
     // Create runtime
     let mut runtime = Runtime::new(&args)?;
