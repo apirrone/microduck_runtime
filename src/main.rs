@@ -90,14 +90,6 @@ struct Args {
     #[arg(long)]
     log_file: Option<String>,
 
-    /// Enable imitation mode (adds phase observation)
-    #[arg(long)]
-    imitation: bool,
-
-    /// Gait period in seconds (only used if --imitation is set)
-    #[arg(long, default_value_t = 0.72)]
-    gait_period: f64,
-
     /// Linear velocity command in X direction (m/s)
     #[arg(short = 'x', long = "vel_x", default_value_t = 0.0, allow_hyphen_values = true)]
     vel_x: f64,
@@ -111,23 +103,19 @@ struct Args {
     vel_z: f64,
 
     /// Action scale multiplier (scales policy outputs before applying to motors)
-    #[arg(long, default_value_t = 1.0, allow_hyphen_values = true)]
+    #[arg(long, default_value_t = 0.6, allow_hyphen_values = true)]
     action_scale: f64,
 
     /// Enable recording mode: save observations to pickle file on Ctrl+C
     #[arg(short, long)]
     record: Option<String>,
 
-    /// Enable Xbox controller input for velocity commands
-    #[arg(short, long)]
-    controller: bool,
-
     /// Maximum linear velocity for controller input (m/s)
-    #[arg(long, default_value_t = 0.3)]
+    #[arg(long, default_value_t = 0.4)]
     max_linear_vel: f64,
 
     /// Maximum angular velocity for controller input (rad/s)
-    #[arg(long, default_value_t = 1.5)]
+    #[arg(long, default_value_t = 2.0)]
     max_angular_vel: f64,
 
     /// Controller deadzone (0.0-1.0)
@@ -135,7 +123,7 @@ struct Args {
     controller_deadzone: f32,
 
     /// Maximum head/neck joint offset in head mode (radians)
-    #[arg(long, default_value_t = 0.3)]
+    #[arg(long, default_value_t = 2.5)]
     head_max: f64,
 
     /// Smoothing factor for head commands (0.0=no movement, 1.0=no smoothing)
@@ -149,10 +137,6 @@ struct Args {
     /// Position P gain for mouth motor (ID 34)
     #[arg(long, default_value_t = 400)]
     mouth_kp: u16,
-
-    /// Use old 51D observation layout (no body_cmd), for policies trained before body control
-    #[arg(long)]
-    old: bool,
 
     /// Path to ground pick policy ONNX model file (enables A button one-shot ground pick)
     #[arg(long)]
@@ -177,7 +161,7 @@ struct Runtime {
     motor_controller: MotorController,
     imu_controller: ImuController,
     policy: Policy,
-    controller: Option<Controller>,
+    controller: Controller,
     control_freq: u32,
     pid_gains: (u16, u16, u16), // (kP, kI, kD)
     pitch_offset: f64,
@@ -187,9 +171,6 @@ struct Runtime {
     log_file: Option<File>,
     start_time: Option<Instant>,
     step_counter: u64,
-    use_imitation: bool,
-    gait_period: f64,
-    imitation_phase: f64,
     record_file: Option<String>,
     recorded_observations: Vec<TimestampedObservation>,
     policy_enabled: bool,  // Controls whether policy inference runs
@@ -203,7 +184,6 @@ struct Runtime {
     head_alpha: f64,  // EMA smoothing factor for head commands (0=still, 1=no smoothing)
     cmd_alpha: f64,   // EMA smoothing factor for velocity commands (0=still, 1=no smoothing)
     body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
-    old_policy: bool,  // Use 51D obs layout (no body_cmd) for older policies
     y_button_prev_state: bool,  // Track Y button state for edge detection
     body_pose_mode: bool,  // Body pose control mode (B button)
     b_button_prev_state: bool,  // Track B button state for edge detection
@@ -287,25 +267,6 @@ impl Runtime {
             println!("⚠  Using pitch offset: {:.4} rad ({:.2}°)", args.pitch_offset, args.pitch_offset.to_degrees());
         }
 
-        // Imitation mode configuration
-        let gait_period = if args.imitation {
-            // Priority 1: Use ONNX metadata if available
-            // Priority 2: Fall back to command-line argument
-            let period = policy.gait_period().unwrap_or(args.gait_period);
-
-            if let Some(onnx_period) = policy.gait_period() {
-                println!("✓ Imitation mode enabled");
-                println!("  Using gait period from ONNX metadata: {:.4}s", onnx_period);
-            } else {
-                println!("✓ Imitation mode enabled");
-                println!("  Using gait period from command-line: {:.4}s", args.gait_period);
-            }
-
-            period
-        } else {
-            args.gait_period  // Not used, but keep default
-        };
-
         // Velocity command configuration
         if args.vel_x != 0.0 || args.vel_y != 0.0 || args.vel_z != 0.0 {
             println!("✓ Velocity command: x={:.3} m/s, y={:.3} m/s, z={:.3} rad/s",
@@ -323,22 +284,17 @@ impl Runtime {
         }
 
         // Controller configuration
-        let controller = if args.controller {
-            println!("Initializing Xbox controller...");
-            let mut ctrl = Controller::new()
-                .context("Failed to initialize controller")?;
-            ctrl.wait_for_connection()
-                .context("Failed to connect to controller")?;
-            if let Some(name) = ctrl.get_controller_name() {
-                println!("✓ Controller connected: {}", name);
-            }
-            println!("  Max linear velocity: {:.2} m/s", args.max_linear_vel);
-            println!("  Max angular velocity: {:.2} rad/s", args.max_angular_vel);
-            println!("  Deadzone: {:.2}", args.controller_deadzone);
-            Some(ctrl)
-        } else {
-            None
-        };
+        println!("Initializing Xbox controller...");
+        let mut controller = Controller::new()
+            .context("Failed to initialize controller")?;
+        controller.wait_for_connection()
+            .context("Failed to connect to controller")?;
+        if let Some(name) = controller.get_controller_name() {
+            println!("✓ Controller connected: {}", name);
+        }
+        println!("  Max linear velocity: {:.2} m/s", args.max_linear_vel);
+        println!("  Max angular velocity: {:.2} rad/s", args.max_angular_vel);
+        println!("  Deadzone: {:.2}", args.controller_deadzone);
 
         // Initialize log file if requested
         let mut log_file = None;
@@ -347,7 +303,7 @@ impl Runtime {
                 .context(format!("Failed to create log file: {}", path))?;
 
             // Write CSV header: step, time, obs_0..obs_N, action_0..action_13
-            let obs_size = if args.imitation { 53 } else if args.old { 51 } else { 54 };
+            let obs_size = 51;
             write!(file, "step,time")?;
             for i in 0..obs_size {
                 write!(file, ",obs_{}", i)?;
@@ -361,9 +317,8 @@ impl Runtime {
             println!("✓ CSV logging enabled: {}", path);
         }
 
-        // Policy starts disabled in recording mode or when a controller is connected
-        // (controller case: robot holds init pose until user presses Start)
-        let policy_enabled = args.record.is_none() && !args.controller;
+        // Policy starts disabled — user presses Start to enable
+        let policy_enabled = false;
 
         Ok(Self {
             motor_controller,
@@ -379,9 +334,6 @@ impl Runtime {
             log_file,
             start_time: None,
             step_counter: 0,
-            use_imitation: args.imitation,
-            gait_period,  // Use computed gait_period (from ONNX or CLI)
-            imitation_phase: 0.0,
             record_file: args.record.clone(),
             recorded_observations: Vec::new(),
             policy_enabled,
@@ -395,7 +347,6 @@ impl Runtime {
             head_alpha: args.head_alpha,
             cmd_alpha: args.cmd_alpha,
             body_cmd: [0.0; 3],
-            old_policy: args.old,
             y_button_prev_state: false,
             body_pose_mode: false,
             b_button_prev_state: false,
@@ -448,12 +399,12 @@ impl Runtime {
 
     /// Run one control loop iteration
     fn control_step(&mut self) -> Result<()> {
-        // Update controller input if enabled
-        if let Some(ref mut controller) = self.controller {
-            controller.update()
+        // Update controller input
+        {
+            self.controller.update()
                 .context("Failed to update controller")?;
 
-            let state = controller.get_state();
+            let state = self.controller.get_state();
 
             // Apply deadzone to all stick inputs
             let left_y = Controller::apply_deadzone(state.left_stick_y, self.controller_deadzone);
@@ -462,7 +413,7 @@ impl Runtime {
             let right_y = Controller::apply_deadzone(state.right_stick_y, self.controller_deadzone);
 
             // Handle Y button (North) to toggle head mode
-            let y_pressed = controller.is_button_pressed("North");
+            let y_pressed = self.controller.is_button_pressed("North");
             if y_pressed && !self.y_button_prev_state {
                 self.head_mode = !self.head_mode;
                 if self.head_mode {
@@ -475,7 +426,7 @@ impl Runtime {
             self.y_button_prev_state = y_pressed;
 
             // Handle B button (East) to toggle body pose mode
-            let b_pressed = controller.is_button_pressed("East");
+            let b_pressed = self.controller.is_button_pressed("East");
             if b_pressed && !self.b_button_prev_state {
                 self.body_pose_mode = !self.body_pose_mode;
                 if self.body_pose_mode {
@@ -489,7 +440,7 @@ impl Runtime {
             self.b_button_prev_state = b_pressed;
 
             // Handle A button (South) to trigger one ground pick cycle
-            let a_pressed = controller.is_button_pressed("South");
+            let a_pressed = self.controller.is_button_pressed("South");
             if a_pressed && !self.a_button_prev_state && self.policy.has_ground_pick() && !self.ground_pick_active {
                 self.ground_pick_active = true;
                 self.ground_pick_phase = 0.0;
@@ -552,7 +503,7 @@ impl Runtime {
             self.mouth_position = MOUTH_MIN_ANGLE + state.right_trigger as f64 * (MOUTH_MAX_ANGLE - MOUTH_MIN_ANGLE);
 
             // Handle Start button to toggle policy inference (or recover from fall)
-            let start_pressed = controller.is_button_pressed("Start");
+            let start_pressed = self.controller.is_button_pressed("Start");
             if start_pressed && !self.start_button_prev_state {
                 // Button was just pressed (rising edge)
                 if self.fallen {
@@ -624,31 +575,14 @@ impl Runtime {
         let motor_state = self.motor_controller.read_state()
             .context("Failed to read motor state")?;
 
-        // Build observation with optional phase
-        let phase = if self.use_imitation {
-            Some(self.imitation_phase)
-        } else {
-            None
-        };
-
-        // Normalize body_cmd before inserting into observation.
-        // Training uses max_z=0.025, max_angle=0.349 rad (20°).
-        // Old policies (51D) don't have body_cmd in their obs — pass None.
-        let body_cmd_norm = [
-            (self.body_cmd[0] / 0.025) as f32,
-            (self.body_cmd[1] / 0.349) as f32,
-            (self.body_cmd[2] / 0.349) as f32,
-        ];
-        let body_cmd_arg = if self.old_policy { None } else { Some(&body_cmd_norm) };
-
         // Ground pick: override command with phase encoding [cos, sin, 0] and use 51D obs
         // Body pose mode: put normalized body_cmd into command slot (51D obs, matching standing policy training)
         let gp_cmd;
         let standing_obs_cmd;
-        let (effective_command, effective_body_cmd, obs_command) = if self.ground_pick_active {
+        let (effective_command, obs_command) = if self.ground_pick_active {
             let angle = 2.0 * std::f64::consts::PI * self.ground_pick_phase;
             gp_cmd = [angle.cos(), angle.sin(), 0.0];
-            (&gp_cmd, None, &gp_cmd)  // Ground pick policy uses 51D obs (no body_cmd)
+            (&gp_cmd, &gp_cmd)
         } else if self.body_pose_mode {
             // Keep effective_command = [0,0,0] so policy stays in standing mode.
             // Pass normalized body_cmd as the obs command (replaces vel cmd in 51D standing obs).
@@ -657,9 +591,9 @@ impl Runtime {
                 self.body_cmd[1] / 0.349,
                 self.body_cmd[2] / 0.349,
             ];
-            (&self.command, None, &standing_obs_cmd)
+            (&self.command, &standing_obs_cmd)
         } else {
-            (&self.command, body_cmd_arg, &self.command)
+            (&self.command, &self.command)
         };
 
         // Standing policy transitions: apply action_scale=1 and kp=60% when switching to standing
@@ -689,8 +623,6 @@ impl Runtime {
             obs_command,
             &motor_state,
             &self.last_action,
-            phase,
-            effective_body_cmd,
         );
 
         // Run policy inference (or hold default position if policy disabled)
@@ -775,13 +707,6 @@ impl Runtime {
                     .context("Failed to restore PID gains after ground pick")?;
                 println!("▲ Ground pick: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
             }
-        }
-
-        // Update phase for next step
-        if self.use_imitation {
-            let dt = 1.0 / self.control_freq as f64;
-            self.imitation_phase += dt / self.gait_period;
-            self.imitation_phase = self.imitation_phase % 1.0;  // Keep in [0, 1]
         }
 
         Ok(())
@@ -869,16 +794,8 @@ impl Runtime {
                     Err(_) => "Current read failed".to_string(),
                 };
 
-                // Build velocity command string if controller is active or commands are non-zero
-                let cmd_str = if self.controller.is_some() ||
-                              self.command[0].abs() > 0.001 ||
-                              self.command[1].abs() > 0.001 ||
-                              self.command[2].abs() > 0.001 {
-                    format!(" | Cmd: [{:.2}, {:.2}, {:.2}]",
-                            self.command[0], self.command[1], self.command[2])
-                } else {
-                    String::new()
-                };
+                let cmd_str = format!(" | Cmd: [{:.2}, {:.2}, {:.2}]",
+                    self.command[0], self.command[1], self.command[2]);
 
                 println!(
                     "⏱️  Runtime: {:.1}s | Iter: {} | Avg: {:.2}ms ({:.1}%) | Min: {:.2}ms | Max: {:.2}ms | Jitter: {:.2}ms | Freq: {:.1}Hz | {}{}",
