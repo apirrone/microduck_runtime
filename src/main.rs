@@ -361,8 +361,9 @@ impl Runtime {
             println!("✓ CSV logging enabled: {}", path);
         }
 
-        // In recording mode, policy starts disabled and will be enabled after standby
-        let policy_enabled = args.record.is_none();
+        // Policy starts disabled in recording mode or when a controller is connected
+        // (controller case: robot holds init pose until user presses Start)
+        let policy_enabled = args.record.is_none() && !args.controller;
 
         Ok(Self {
             motor_controller,
@@ -632,23 +633,34 @@ impl Runtime {
         };
 
         // Normalize body_cmd before inserting into observation.
-        // Training uses max_z=0.03, max_angle=0.349 rad (20°).
+        // Training uses max_z=0.025, max_angle=0.349 rad (20°).
         // Old policies (51D) don't have body_cmd in their obs — pass None.
         let body_cmd_norm = [
-            (self.body_cmd[0] / 0.03) as f32,
+            (self.body_cmd[0] / 0.025) as f32,
             (self.body_cmd[1] / 0.349) as f32,
             (self.body_cmd[2] / 0.349) as f32,
         ];
         let body_cmd_arg = if self.old_policy { None } else { Some(&body_cmd_norm) };
 
         // Ground pick: override command with phase encoding [cos, sin, 0] and use 51D obs
+        // Body pose mode: put normalized body_cmd into command slot (51D obs, matching standing policy training)
         let gp_cmd;
-        let (effective_command, effective_body_cmd) = if self.ground_pick_active {
+        let standing_obs_cmd;
+        let (effective_command, effective_body_cmd, obs_command) = if self.ground_pick_active {
             let angle = 2.0 * std::f64::consts::PI * self.ground_pick_phase;
             gp_cmd = [angle.cos(), angle.sin(), 0.0];
-            (&gp_cmd, None)  // Ground pick policy uses 51D obs (no body_cmd)
+            (&gp_cmd, None, &gp_cmd)  // Ground pick policy uses 51D obs (no body_cmd)
+        } else if self.body_pose_mode {
+            // Keep effective_command = [0,0,0] so policy stays in standing mode.
+            // Pass normalized body_cmd as the obs command (replaces vel cmd in 51D standing obs).
+            standing_obs_cmd = [
+                self.body_cmd[0] / 0.025,
+                self.body_cmd[1] / 0.349,
+                self.body_cmd[2] / 0.349,
+            ];
+            (&self.command, None, &standing_obs_cmd)
         } else {
-            (&self.command, body_cmd_arg)
+            (&self.command, body_cmd_arg, &self.command)
         };
 
         // Standing policy transitions: apply action_scale=1 and kp=60% when switching to standing
@@ -675,7 +687,7 @@ impl Runtime {
 
         let observation = Observation::new(
             &imu_data,
-            effective_command,
+            obs_command,
             &motor_state,
             &self.last_action,
             phase,
