@@ -205,6 +205,8 @@ struct Runtime {
     body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
     old_policy: bool,  // Use 51D obs layout (no body_cmd) for older policies
     y_button_prev_state: bool,  // Track Y button state for edge detection
+    body_pose_mode: bool,  // Body pose control mode (B button)
+    b_button_prev_state: bool,  // Track B button state for edge detection
     fallen: bool,  // Whether the robot is currently detected as fallen
     fall_detected_since: Option<Instant>,  // When continuous fall detection started (for debounce)
     mouth_position: f64,  // Current mouth motor position in radians (0 to MOUTH_MAX_ANGLE)
@@ -394,6 +396,8 @@ impl Runtime {
             body_cmd: [0.0; 3],
             old_policy: args.old,
             y_button_prev_state: false,
+            body_pose_mode: false,
+            b_button_prev_state: false,
             fallen: false,
             fall_detected_since: None,
             mouth_position: MOUTH_MIN_ANGLE,
@@ -469,6 +473,20 @@ impl Runtime {
             }
             self.y_button_prev_state = y_pressed;
 
+            // Handle B button (East) to toggle body pose mode
+            let b_pressed = controller.is_button_pressed("East");
+            if b_pressed && !self.b_button_prev_state {
+                self.body_pose_mode = !self.body_pose_mode;
+                if self.body_pose_mode {
+                    self.body_cmd = [0.0; 3];
+                    println!("BODY POSE mode: ON (L-stick up/down: z ±25mm, R-stick up: pitch ±20°, R-stick down: roll ±20°)");
+                } else {
+                    self.body_cmd = [0.0; 3];
+                    println!("BODY POSE mode: OFF");
+                }
+            }
+            self.b_button_prev_state = b_pressed;
+
             // Handle A button (South) to trigger one ground pick cycle
             let a_pressed = controller.is_button_pressed("South");
             if a_pressed && !self.a_button_prev_state && self.policy.has_ground_pick() && !self.ground_pick_active {
@@ -499,6 +517,21 @@ impl Runtime {
                     self.head_offsets[i] += self.head_alpha * (targets[i] - self.head_offsets[i]);
                 }
                 self.command = [0.0; 3];
+            } else if self.body_pose_mode {
+                // Body pose mode: joysticks control standing body pose
+                // - Left stick up/down → z height (±25 mm)
+                // - Right stick up (positive) → pitch (±20°)
+                // - Right stick down (negative) → roll (±20°)
+                const BODY_MAX_Z: f64 = 0.025;
+                const BODY_MAX_ANGLE: f64 = 0.349; // ~20° in radians
+                let target_z = left_x as f64 * BODY_MAX_Z;
+                let right_y_val = right_y as f64;
+                let target_pitch = if right_y_val > 0.0 { right_y_val * BODY_MAX_ANGLE } else { 0.0 };
+                let target_roll  = if right_y_val < 0.0 { -right_y_val * BODY_MAX_ANGLE } else { 0.0 };
+                self.body_cmd[0] += self.cmd_alpha * (target_z     - self.body_cmd[0]);
+                self.body_cmd[1] += self.cmd_alpha * (target_pitch  - self.body_cmd[1]);
+                self.body_cmd[2] += self.cmd_alpha * (target_roll   - self.body_cmd[2]);
+                self.command = [0.0; 3]; // keep command near zero to stay in standing mode
             } else {
                 // Normal mode: joysticks control velocity commands
                 // - Left stick X (up/down) → vel_x forward/backward
