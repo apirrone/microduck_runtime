@@ -520,15 +520,14 @@ impl Runtime {
                 self.command = [0.0; 3];
             } else if self.body_pose_mode {
                 // Body pose mode: joysticks control standing body pose
-                // - Left stick up/down → z height (±25 mm)
-                // - Right stick up (positive) → pitch (±20°)
-                // - Right stick down (negative) → roll (±20°)
+                // - Left stick up/down (left_x)  → z height  (±25 mm)
+                // - Right stick up/down (right_x) → pitch     (±20°)
+                // - Right stick left/right (right_y) → roll   (±20°)
                 const BODY_MAX_Z: f64 = 0.025;
                 const BODY_MAX_ANGLE: f64 = 0.349; // ~20° in radians
-                let target_z = left_x as f64 * BODY_MAX_Z;
-                let right_y_val = right_y as f64;
-                let target_pitch = if right_y_val > 0.0 { right_y_val * BODY_MAX_ANGLE } else { 0.0 };
-                let target_roll  = if right_y_val < 0.0 { -right_y_val * BODY_MAX_ANGLE } else { 0.0 };
+                let target_z     = left_x  as f64 * BODY_MAX_Z;
+                let target_pitch = right_x as f64 * BODY_MAX_ANGLE;
+                let target_roll  = right_y  as f64 * BODY_MAX_ANGLE;
                 self.body_cmd[0] += self.cmd_alpha * (target_z     - self.body_cmd[0]);
                 self.body_cmd[1] += self.cmd_alpha * (target_pitch  - self.body_cmd[1]);
                 self.body_cmd[2] += self.cmd_alpha * (target_roll   - self.body_cmd[2]);
@@ -796,8 +795,8 @@ impl Runtime {
         self.start_time = Some(Instant::now());
         let runtime_start = Instant::now();
 
-        // If recording mode and policy is disabled, schedule it to enable after 1 second
-        let policy_enable_time = if !self.policy_enabled {
+        // In recording mode, schedule policy to enable after 1 second standby
+        let policy_enable_time = if !self.policy_enabled && self.record_file.is_some() {
             Some(Instant::now() + Duration::from_secs(1))
         } else {
             None
