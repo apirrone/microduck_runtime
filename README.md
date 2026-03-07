@@ -12,8 +12,7 @@ curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/inst
 
 ## RPI setup
 - `scp rpi_setup/config.txt in /boot/firmware/`
-- `scp rpi_setup/.bashrc in ~/`
-- run `sudo rpi-config`
+- run `sudo raspi-config`
     - interface
         - enable i2c
         - disable serial console, enable serial port
@@ -30,10 +29,10 @@ curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/inst
     - trust <mac>
 - run `test_controller`
 
-## Recommended run command
+## Run : 
 
 ```bash
-microduck_runtime -m ~/microduck/policies/walking.onnx --action-scale 0.5 --head-max 1.5 --max-linear-vel 0.5 --max-angular-vel 4 --gravity-offset-x 0.1 -c
+microduck_runtime
 ```
 
 ## Controller
@@ -41,11 +40,14 @@ microduck_runtime -m ~/microduck/policies/walking.onnx --action-scale 0.5 --head
 | Button | Action |
 |--------|--------|
 | Start | Enable / disable policy |
-| Y | Toggle head mode (joysticks control head joints instead of velocity) |
+| X | Toggle head mode |
+| B | Toggle body pose mode |
+| A | Trigger ground pick |
 | Left stick | Forward / strafe |
 | Right stick Y | Turn |
+| Right trigger | Open/close mouth |
 
-**Head mode** (Y button):
+**Head mode** (X button) — joysticks control head joints:
 
 | Stick | Joint |
 |-------|-------|
@@ -55,6 +57,14 @@ microduck_runtime -m ~/microduck/policies/walking.onnx --action-scale 0.5 --head
 | Right stick Y | Head roll |
 
 Head offsets are preserved when switching back to walking mode.
+
+**Body pose mode** (B button) — joysticks control standing body pose:
+
+| Stick | Action |
+|-------|--------|
+| Left stick X | Z height (±25 mm) |
+| Right stick X | Pitch (±20°) |
+| Right stick Y | Roll (±20°) |
 
 **Fall detection**: if the robot is detected as fallen for 0.2s, the policy stops and motors go limp (kP=50). Press Start to recover.
 

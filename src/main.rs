@@ -413,7 +413,7 @@ impl Runtime {
             let right_y = Controller::apply_deadzone(state.right_stick_y, self.controller_deadzone);
 
             // Handle Y button (North) to toggle head mode
-            let y_pressed = self.controller.is_button_pressed("North");
+            let y_pressed = self.controller.is_button_pressed("West");
             if y_pressed && !self.y_button_prev_state {
                 self.head_mode = !self.head_mode;
                 if self.head_mode {
