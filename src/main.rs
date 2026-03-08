@@ -397,8 +397,8 @@ impl Runtime {
         }
 
         // Smoothly interpolate to default position over 3 seconds
-        println!("Moving to default position over 3 seconds...");
-        self.motor_controller.interpolate_to_default(Duration::from_secs(3))
+        println!("Moving to default position over 1 second...");
+        self.motor_controller.interpolate_to_default(Duration::from_secs(1))
             .context("Failed to interpolate to default position")?;
 
         println!("✓ Motors initialized and moved to default position");
