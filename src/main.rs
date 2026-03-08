@@ -472,10 +472,10 @@ impl Runtime {
             } else if self.body_pose_mode {
                 // Body pose mode: joysticks control standing body pose
                 // - Left stick up/down (left_x)  → z height  (±25 mm)
-                // - Right stick up/down (right_x) → pitch     (±20°)
-                // - Right stick left/right (right_y) → roll   (±20°)
-                const BODY_MAX_Z: f64 = 0.025;
-                const BODY_MAX_ANGLE: f64 = 0.349; // ~20° in radians
+                // - Right stick up/down (right_x) → pitch     (±30°)
+                // - Right stick left/right (right_y) → roll   (±30°)
+                const BODY_MAX_Z: f64 = 0.03;
+                const BODY_MAX_ANGLE: f64 = 0.5236; // ~30° in radians
                 let target_z     = left_x  as f64 * BODY_MAX_Z;
                 let target_pitch = right_x as f64 * BODY_MAX_ANGLE;
                 let target_roll  = right_y  as f64 * BODY_MAX_ANGLE;
@@ -587,9 +587,9 @@ impl Runtime {
             // Keep effective_command = [0,0,0] so policy stays in standing mode.
             // Pass normalized body_cmd as the obs command (replaces vel cmd in 51D standing obs).
             standing_obs_cmd = [
-                self.body_cmd[0] / 0.025,
-                self.body_cmd[1] / 0.349,
-                self.body_cmd[2] / 0.349,
+                self.body_cmd[0] / 0.03,
+                self.body_cmd[1] / 0.5236,
+                self.body_cmd[2] / 0.5236,
             ];
             (&self.command, &standing_obs_cmd)
         } else {
