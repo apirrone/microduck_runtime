@@ -945,7 +945,7 @@ async fn main() -> Result<()> {
 
     // Step 1: wait for first Start press → initialize motors
     println!("\n⏳ Press Start to initialize motors...");
-    runtime.wait_for_start_button(false).await?;
+    runtime.wait_for_start_button(true).await?;
     runtime.initialize_motors()?;
 
     // If recording mode is enabled, wait 1 second before starting the control loop
@@ -958,7 +958,7 @@ async fn main() -> Result<()> {
 
     // Step 2: wait for second Start press → run the policy
     println!("\n⏳ Press Start to run the policy...");
-    runtime.wait_for_start_button(true).await?;
+    runtime.wait_for_start_button(false).await?;
 
     // Run main loop (will exit when Ctrl+C is pressed)
     runtime.run(shutdown_flag).await?;
