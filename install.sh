@@ -137,10 +137,6 @@ else
     done
 fi
 
-# Cleanup
-cd ~
-rm -rf "$TMP_DIR"
-
 # Install systemd service (if service file is present in archive)
 SERVICE_NAME="microduck_runtime.service"
 SERVICE_DIR="/etc/systemd/system"
@@ -155,6 +151,10 @@ if [ -f "$SERVICE_NAME" ]; then
 else
     echo -e "${YELLOW}Note: $SERVICE_NAME not found in archive, skipping service setup.${NC}"
 fi
+
+# Cleanup
+cd ~
+rm -rf "$TMP_DIR"
 
 # Verify installation
 if command -v $BINARY_NAME &> /dev/null; then

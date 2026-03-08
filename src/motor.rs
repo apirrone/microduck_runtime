@@ -250,6 +250,16 @@ impl MotorController {
         Ok(())
     }
 
+    /// Turn all motor LEDs on or off
+    pub fn set_all_leds(&mut self, on: bool) -> Result<()> {
+        let value: u8 = if on { 1 } else { 0 };
+        let values = [value; NUM_MOTORS];
+        self.controller
+            .sync_write_led(&MOTOR_IDS, &values)
+            .map_err(|e| anyhow::anyhow!("Failed to set LEDs: {}", e))?;
+        Ok(())
+    }
+
     /// Set PID gains for all motors
     pub fn set_pid_gains(&mut self, kp: u16, ki: u16, kd: u16) -> Result<()> {
         for &id in &MOTOR_IDS {

@@ -840,8 +840,11 @@ impl Runtime {
         Ok(())
     }
 
-    /// Block until the Start button is pressed (rising edge)
-    async fn wait_for_start_button(&mut self) -> Result<()> {
+    /// Block until the Start button is pressed (rising edge).
+    /// If `blink` is true, pulses all motor LEDs in a double-blink heartbeat
+    /// pattern (ON 100ms · OFF 100ms · ON 100ms · OFF 700ms) so the user
+    /// can tell the robot is ready and waiting — distinct from a motor error LED.
+    async fn wait_for_start_button(&mut self, blink: bool) -> Result<()> {
         // Drain any currently-pressed state first so we wait for a fresh press
         loop {
             self.controller.update().context("Failed to update controller")?;
@@ -850,12 +853,32 @@ impl Runtime {
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        // Now wait for a rising edge
+        // Now wait for a rising edge, blinking LEDs if requested
+        // Pattern (20 ms ticks, period = 50 ticks = 1 000 ms):
+        //   ticks  0- 4 → ON   (100 ms)
+        //   ticks  5- 9 → OFF  (100 ms)
+        //   ticks 10-14 → ON   (100 ms)
+        //   ticks 15-49 → OFF  (700 ms)
+        let mut tick: u64 = 0;
         loop {
             self.controller.update().context("Failed to update controller")?;
             if self.controller.is_button_pressed("Start") {
+                if blink {
+                    self.motor_controller.set_all_leds(false).ok();
+                }
                 return Ok(());
             }
+            if blink {
+                let phase = tick % 50;
+                match phase {
+                    0  => { self.motor_controller.set_all_leds(true).ok(); }
+                    5  => { self.motor_controller.set_all_leds(false).ok(); }
+                    10 => { self.motor_controller.set_all_leds(true).ok(); }
+                    15 => { self.motor_controller.set_all_leds(false).ok(); }
+                    _  => {}
+                }
+            }
+            tick += 1;
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
@@ -922,7 +945,7 @@ async fn main() -> Result<()> {
 
     // Step 1: wait for first Start press → initialize motors
     println!("\n⏳ Press Start to initialize motors...");
-    runtime.wait_for_start_button().await?;
+    runtime.wait_for_start_button(false).await?;
     runtime.initialize_motors()?;
 
     // If recording mode is enabled, wait 1 second before starting the control loop
@@ -935,7 +958,7 @@ async fn main() -> Result<()> {
 
     // Step 2: wait for second Start press → run the policy
     println!("\n⏳ Press Start to run the policy...");
-    runtime.wait_for_start_button().await?;
+    runtime.wait_for_start_button(true).await?;
 
     // Run main loop (will exit when Ctrl+C is pressed)
     runtime.run(shutdown_flag).await?;
