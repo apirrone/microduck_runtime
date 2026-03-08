@@ -396,9 +396,10 @@ impl Runtime {
             }
         }
 
-        // Move all motors to default position
-        self.motor_controller.write_goal_positions(&DEFAULT_POSITION)
-            .context("Failed to write default positions")?;
+        // Smoothly interpolate to default position over 3 seconds
+        println!("Moving to default position over 3 seconds...");
+        self.motor_controller.interpolate_to_default(Duration::from_secs(3))
+            .context("Failed to interpolate to default position")?;
 
         println!("✓ Motors initialized and moved to default position");
         Ok(())
@@ -723,9 +724,18 @@ impl Runtime {
                 self.policy.set_ground_pick_active(false);
                 self.action_scale = self.prev_action_scale;
                 let (kp, ki, kd) = self.pid_gains;
-                self.motor_controller.set_pid_gains(kp, ki, kd)
-                    .context("Failed to restore PID gains after ground pick")?;
-                println!("▲ Ground pick: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
+                if self.is_using_standing {
+                    // Return to standing mode: re-apply 60% kP (transition won't fire since
+                    // is_using_standing is already true, so we must restore it explicitly)
+                    let standing_kp = (kp as f64 * 0.6).round() as u16;
+                    self.motor_controller.set_pid_gains(standing_kp, ki, kd)
+                        .context("Failed to restore standing PID gains after ground pick")?;
+                    println!("▲ Ground pick: done, returning to standing (action_scale={:.2}, kP={})", self.action_scale, standing_kp);
+                } else {
+                    self.motor_controller.set_pid_gains(kp, ki, kd)
+                        .context("Failed to restore PID gains after ground pick")?;
+                    println!("▲ Ground pick: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
+                }
             }
         }
 

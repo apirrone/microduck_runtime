@@ -250,6 +250,30 @@ impl MotorController {
         Ok(())
     }
 
+    /// Smoothly interpolate all motors from their current positions to DEFAULT_POSITION.
+    /// Reads current positions once, then linearly interpolates over `duration` at 50 Hz.
+    pub fn interpolate_to_default(&mut self, duration: Duration) -> Result<()> {
+        let steps = (duration.as_secs_f64() * 50.0).round() as u64;
+        let dt = Duration::from_millis(20);
+
+        // Read current positions as interpolation start
+        let state = self.read_state()
+            .context("Failed to read motor positions before interpolation")?;
+        let start = state.positions;
+
+        for step in 1..=steps {
+            let t = step as f64 / steps as f64;
+            let mut targets = [0.0f64; NUM_MOTORS];
+            for i in 0..NUM_MOTORS {
+                targets[i] = start[i] + t * (DEFAULT_POSITION[i] - start[i]);
+            }
+            self.write_goal_positions(&targets)
+                .context("Failed to write interpolated positions")?;
+            std::thread::sleep(dt);
+        }
+        Ok(())
+    }
+
     /// Turn all motor LEDs on or off
     pub fn set_all_leds(&mut self, on: bool) -> Result<()> {
         let value: u8 = if on { 1 } else { 0 };

@@ -9,11 +9,11 @@ fn main() -> Result<()> {
     motor_controller.set_torque_enable(true)
         .context("Failed to enable motor torque")?;
 
-    motor_controller.write_goal_positions(&DEFAULT_POSITION)
-        .context("Failed to write initial positions")?;
+    println!("Moving to default pose over 3 seconds...");
+    motor_controller.interpolate_to_default(Duration::from_secs(3))
+        .context("Failed to interpolate to default position")?;
 
     println!("Motors initialized to default pose.");
-    std::thread::sleep(Duration::from_secs(1));
 
     Ok(())
 }
