@@ -1,0 +1,37 @@
+fn main() {
+    println!("╔════════════════════════════════════════════════════════════════╗");
+    println!("║                  Microduck Commands                           ║");
+    println!("╚════════════════════════════════════════════════════════════════╝");
+    println!();
+    println!("  RUNTIME");
+    println!("  ───────────────────────────────────────────────────────────────");
+    println!("  microduck_runtime   Main robot runtime. Loads ONNX policy, reads");
+    println!("                      IMU + motors, runs control loop. Xbox controller");
+    println!("                      required. Use --help for all options.");
+    println!();
+    println!("  SETUP");
+    println!("  ───────────────────────────────────────────────────────────────");
+    println!("  init                Enable motor torque and move all joints to the");
+    println!("                      default standing pose.");
+    println!();
+    println!("  em                  Emergency stop: disable torque on all motors.");
+    println!();
+    println!("  check_voltage       Read and print the voltage reported by each");
+    println!("                      motor.");
+    println!();
+    println!("  calibrate_imu       Interactive BNO055 IMU calibration wizard.");
+    println!("                      Saves calibration data to");
+    println!("                      ~/.config/microduck/imu_calibration.bin");
+    println!();
+    println!("  DIAGNOSTICS");
+    println!("  ───────────────────────────────────────────────────────────────");
+    println!("  test_imu            Stream IMU readings (accel, gyro) with axis remapping.");
+    println!();
+    println!("  test_i2c_raw        Raw I2C connectivity check for the BNO055 sensor.");
+    println!();
+    println!("  test_controller     Display Xbox controller state (axes + buttons)");
+    println!("                      with live bar graphs.");
+    println!();
+    println!("  microduck_help      Show this help message.");
+    println!();
+}

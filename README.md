@@ -87,13 +87,11 @@ These commands are available after installing with the curl command :
 | Binary | Description |
 |--------|-------------|
 | `microduck_runtime` | Main runtime — runs the policy and controls the robot |
-| `init` | Enable torque on all motors |
+| `init` | Enable torque on all motors and move to default pose |
 | `em` | Emergency stop — disable torque on all motors |
-| `check_voltage` | Check power supply voltage |
-| `calibrate_imu` | Calibrate the IMU and save calibration to file |
-| `test_controller` | Test gamepad input with a visual bar display |
-| `test_controller_raw` | Dump raw gilrs events from the gamepad (useful for debugging axis/button mappings) |
-| `test_imu` | Verify BNO055 IMU is working |
-| `test_imu2` | Low-level I2C IMU acceleration data reading test |
-| `test_imu3` | BNO055 IMU test with hardware axis remapping |
-| `test_i2c_raw` | Raw I2C communication test with the BNO055 |
+| `check_voltage` | Read present voltage for all motors |
+| `calibrate_imu` | Interactive IMU calibration wizard, saves to `~/.config/microduck/imu_calibration.bin` |
+| `test_imu` | Stream IMU readings (accel, gyro) with axis remapping |
+| `test_i2c_raw` | Raw I2C connectivity check for the BNO055 |
+| `test_controller` | Display Xbox controller state with live bar graphs |
+| `microduck_help` | List all available commands |

@@ -20,14 +20,6 @@ name = "test_i2c_raw"
 path = "src/bin/test_i2c_raw.rs"
 
 [[bin]]
-name = "test_imu2"
-path = "src/bin/test_imu2.rs"
-
-[[bin]]
-name = "test_imu3"
-path = "src/bin/test_imu3.rs"
-
-[[bin]]
 name = "calibrate_imu"
 path = "src/bin/calibrate_imu.rs"
 
@@ -46,6 +38,10 @@ path = "src/bin/em.rs"
 [[bin]]
 name = "check_voltage"
 path = "src/bin/check_voltage.rs"
+
+[[bin]]
+name = "microduck_help"
+path = "src/bin/microduck_help.rs"
 
 [dependencies]
 rustypot = "1.4.2"
