@@ -204,6 +204,8 @@ struct Runtime {
     has_standing_policy: bool,
     is_using_standing: bool,
     standing_prev_action_scale: f64,
+    // Emergency stop
+    select_held_since: Option<Instant>,
 }
 
 impl Runtime {
@@ -365,6 +367,7 @@ impl Runtime {
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
             standing_prev_action_scale: args.action_scale,
+            select_held_since: None,
         })
     }
 
@@ -525,6 +528,19 @@ impl Runtime {
                 }
             }
             self.start_button_prev_state = start_pressed;
+
+            // Hold Select for 2s → emergency stop + restart from scratch
+            let select_pressed = self.controller.is_button_pressed("Select");
+            if select_pressed {
+                let held_since = self.select_held_since.get_or_insert_with(Instant::now);
+                if held_since.elapsed() >= Duration::from_secs(2) {
+                    println!("🛑 Emergency stop! Disabling motors and exiting (systemd will restart)...");
+                    self.motor_controller.set_torque_enable(false).ok();
+                    std::process::exit(1);
+                }
+            } else {
+                self.select_held_since = None;
+            }
         }
 
         // Read IMU data
