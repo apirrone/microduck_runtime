@@ -141,6 +141,21 @@ fi
 cd ~
 rm -rf "$TMP_DIR"
 
+# Install systemd service (if service file is present in archive)
+SERVICE_NAME="microduck_runtime.service"
+SERVICE_DIR="/etc/systemd/system"
+if [ -f "$SERVICE_NAME" ]; then
+    echo "Installing systemd service..."
+    sudo cp "$SERVICE_NAME" "$SERVICE_DIR/"
+    sudo systemctl daemon-reload
+    sudo systemctl enable "$SERVICE_NAME"
+    echo -e "${GREEN}✓ Service installed and enabled (starts on boot)${NC}"
+    echo "  Start now:  sudo systemctl start microduck_runtime"
+    echo "  View logs:  journalctl -u microduck_runtime -f"
+else
+    echo -e "${YELLOW}Note: $SERVICE_NAME not found in archive, skipping service setup.${NC}"
+fi
+
 # Verify installation
 if command -v $BINARY_NAME &> /dev/null; then
     VERSION=$($BINARY_NAME --version 2>&1 || echo "unknown")

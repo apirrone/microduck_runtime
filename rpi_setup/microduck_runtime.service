@@ -1,0 +1,26 @@
+[Unit]
+Description=Microduck Robot Runtime
+After=network.target bluetooth.target
+# Give bluetooth stack time to come up so the controller can pair
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=microduck
+Group=input
+WorkingDirectory=/home/microduck
+Environment=HOME=/home/microduck
+
+ExecStart=/usr/local/bin/microduck_runtime
+Restart=on-failure
+RestartSec=5
+
+# Allow the process to access input devices (joystick/gamepad)
+SupplementaryGroups=input plugdev
+
+# Log stdout/stderr to the systemd journal (view with: journalctl -u microduck_runtime -f)
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

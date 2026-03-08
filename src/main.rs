@@ -840,6 +840,26 @@ impl Runtime {
         Ok(())
     }
 
+    /// Block until the Start button is pressed (rising edge)
+    async fn wait_for_start_button(&mut self) -> Result<()> {
+        // Drain any currently-pressed state first so we wait for a fresh press
+        loop {
+            self.controller.update().context("Failed to update controller")?;
+            if !self.controller.is_button_pressed("Start") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // Now wait for a rising edge
+        loop {
+            self.controller.update().context("Failed to update controller")?;
+            if self.controller.is_button_pressed("Start") {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
     /// Shutdown the runtime safely
     fn shutdown(&mut self) -> Result<()> {
         println!("Shutting down runtime...");
@@ -900,7 +920,9 @@ async fn main() -> Result<()> {
     })
     .context("Failed to set Ctrl+C handler")?;
 
-    // Initialize motors
+    // Step 1: wait for first Start press → initialize motors
+    println!("\n⏳ Press Start to initialize motors...");
+    runtime.wait_for_start_button().await?;
     runtime.initialize_motors()?;
 
     // If recording mode is enabled, wait 1 second before starting the control loop
@@ -910,6 +932,10 @@ async fn main() -> Result<()> {
         tokio::time::sleep(Duration::from_secs(1)).await;
         println!("✓ Starting control loop (1s standby recording, then policy inference)");
     }
+
+    // Step 2: wait for second Start press → run the policy
+    println!("\n⏳ Press Start to run the policy...");
+    runtime.wait_for_start_button().await?;
 
     // Run main loop (will exit when Ctrl+C is pressed)
     runtime.run(shutdown_flag).await?;
