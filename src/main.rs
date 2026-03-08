@@ -396,7 +396,11 @@ impl Runtime {
             }
         }
 
-        println!("✓ Motors initialized with PID gains and torque enabled");
+        // Move all motors to default position
+        self.motor_controller.write_goal_positions(&DEFAULT_POSITION)
+            .context("Failed to write default positions")?;
+
+        println!("✓ Motors initialized and moved to default position");
         Ok(())
     }
 
