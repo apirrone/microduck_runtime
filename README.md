@@ -18,16 +18,28 @@ curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/inst
         - disable serial console, enable serial port
 -  `sudo reboot 0`
 - `curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash`
-- (Optional if trouble connecting the bluetooth controller. I use a xbox one controller btw)
-    - `sudo btmgmt power off`
-    - `sudo btmgmt privacy on`
-    - `sudo btmgmt power on`
-- run `bluetoothctl`
-    - scan on
-    - pair <mac>
-    - connect <mac>
-    - trust <mac>
+
+## Xbox controller
+
+### Normal setup :
+- `bluetoothctl` : 
+    - scan on (and long press pairing button on the controller)
+    - connect <mac address>
+    - wait for it to prompt you to accept pairing -> yes
+    - trust <mac address>
+    
 - run `test_controller`
+
+### If issues : 
+    
+I had this issue : when rebooting, the controller would be stuck in a connect/disconnect loop.
+
+I would have to remove and repair the controller at each reboot.
+
+The solution was to set Privacy to "on" in `/etc/bluetooth/main.conf`. 
+
+Then reboot, remove the device (remove <mac> in bluetoothctl) and do the normal setup above.
+       
 
 ## Run : 
 
