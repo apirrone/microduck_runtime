@@ -6,46 +6,37 @@ Main repo : https://github.com/apirrone/microduck
 
 ## Install command
 
+Run this command everytime you want to update the runtime. If it's the first time setting up, follow RPI setup below
+
 ```bash
 curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash
 ```
 
 ## RPI setup
-- `scp rpi_setup/config.txt in /boot/firmware/`
-- run `sudo raspi-config`
-    - interface
-        - enable i2c
-        - disable serial console, enable serial port
--  `sudo reboot 0`
-- `curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash`
+Docs : [here](rpi_setup/setup.md)
 
-## Xbox controller
 
-### Normal setup :
-- `bluetoothctl` : 
-    - scan on (and long press pairing button on the controller)
-    - connect <mac address>
-    - wait for it to prompt you to accept pairing -> yes
-    - trust <mac address>
-    
-- run `test_controller`
+## Usage : 
 
-### If issues : 
-    
-I had this issue : when rebooting, the controller would be stuck in a connect/disconnect loop.
+After installing everything, a systemd service is running at boot which runs everything automatically. 
 
-I would have to remove and repair the controller at each reboot.
+You turn on the robot, turn on your xbox controller and wait for all the motors of the robot to blink with a heartbeat pattern.
 
-The solution was to set Privacy to "on" in `/etc/bluetooth/main.conf`. 
+Then press start to go to init mode, and start again to start infering the policies.
 
-Then reboot, remove the device (remove <mac> in bluetoothctl) and do the normal setup above.
-       
+If you are experimenting with policies, you may want to run stuff yourself. You can disable the service with : 
 
-## Run : 
+```bash
+sudo systemctl disable microduck_runtime.service
+```
+
+And then you can run the runtime binary yourself with :
 
 ```bash
 microduck_runtime
 ```
+
+Use `-h` to see the options
 
 ## Controller
 
@@ -86,6 +77,7 @@ These commands are available after installing with the curl command :
 
 | Binary | Description |
 |--------|-------------|
+| `microduck_help` | List all available commands |
 | `microduck_runtime` | Main runtime — runs the policy and controls the robot |
 | `init` | Enable torque on all motors and move to default pose |
 | `em` | Emergency stop — disable torque on all motors |
@@ -94,4 +86,3 @@ These commands are available after installing with the curl command :
 | `test_imu` | Stream IMU readings (accel, gyro) with axis remapping |
 | `test_i2c_raw` | Raw I2C connectivity check for the BNO055 |
 | `test_controller` | Display Xbox controller state with live bar graphs |
-| `microduck_help` | List all available commands |
