@@ -5,41 +5,41 @@
 - Download rpi imager : https://www.raspberrypi.com/software/
 - Plug your sd card in your computer
 - run it with `sudo`
-- Select Raspberry Pi Zero 2 W 
+- Select Raspberry Pi Zero 2 W
 
-<image>
+<img width="2560" height="718" alt="Capture d’écran du 2026-03-09 11-20-38" src="https://github.com/user-attachments/assets/94ee8d91-677c-41a2-94da-2cc53976c30a" />
 
 - Select Raspberry Pi OS (other)
 
-<image>
+<img width="2560" height="718" alt="Capture d’écran du 2026-03-09 11-21-15" src="https://github.com/user-attachments/assets/2a9d9338-d87b-4a10-a556-885a57d82240" />
 
 - Select Raspberry Pi OS Lite (64-bit)
 
-<image>
+<img width="2560" height="718" alt="Capture d’écran du 2026-03-09 11-21-35" src="https://github.com/user-attachments/assets/c3a18dfb-0950-4ddf-82c3-1a09ebf5f64a" />
 
 - Select the sd card
 
-<image>
+<img width="2560" height="718" alt="Capture d’écran du 2026-03-09 11-23-32" src="https://github.com/user-attachments/assets/ce3a33b7-7182-40e6-a553-afe6716233b1" />
 
 - Name it "microduck"
 
-<image>
+<img width="659" height="211" alt="Capture d’écran du 2026-03-09 11-24-03" src="https://github.com/user-attachments/assets/d6cab4ad-0418-4ef3-8052-389f90035f87" />
 
 - Select your timezone
 
-<image>
+<img width="659" height="211" alt="Capture d’écran du 2026-03-09 11-24-31" src="https://github.com/user-attachments/assets/137863c4-942b-43c9-bf62-a09ec1373409" />
 
 - Set microduck as username and set a password (I use just microduck too)
 
-<image>
+<img width="670" height="256" alt="Capture d’écran du 2026-03-09 11-24-39" src="https://github.com/user-attachments/assets/97fde1b0-f3cf-445c-9fd8-06a410373316" />
 
 - Set the SSID and password of your network (Tip : I use my phone's hotspot so that I can connect anywhere easily)
+- 
+<img width="685" height="386" alt="Capture d’écran du 2026-03-09 11-25-14" src="https://github.com/user-attachments/assets/de316b0e-176e-43e1-ba04-3b90276896a5" />
 
-<image>
+- Activate ssh with password authentification
 
-- Activate ssh with password
-
-<image>
+<img width="685" height="386" alt="Capture d’écran du 2026-03-09 11-25-54" src="https://github.com/user-attachments/assets/7b109a03-9b9e-4499-9ff7-fbfe13c47f3f" />
 
 - Write
 
