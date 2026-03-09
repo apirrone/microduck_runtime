@@ -54,14 +54,14 @@
         - If it's something like `192.168.10.XXX`, run `sudo nmap -sn 192.168.10.0/24`
         - It'll find the devices connected to the network with the same network submask as yours
         
-- Connect to the Pi with `ssh microduck@<ip>
+- Connect to the Pi with `ssh microduck@[ip]`
 - Tip : in order not to have to enter the password everytime you ssh in the pi, do :
     - login
-    - ssh-keygen (then press enter until it's done)
+    - `ssh-keygen` (then press enter until it's done)
     - logout
-    - ssh-copy-id microduck@<ip>
+    - `ssh-copy-id microduck@[ip]`
     - enter password
-    - Done ! next time you connect in the pi with `ssh microduck@<ip>` it won't ask for your password
+    - Done ! next time you connect in the pi with `ssh microduck@[ip]` it won't ask for your password
  
 - `scp rpi_setup/config.txt in /boot/firmware/`
 - run `sudo raspi-config`
@@ -76,9 +76,9 @@
 ### Normal setup :
 - `bluetoothctl` : 
     - scan on (and long press pairing button on the controller)
-    - connect <mac address>
+    - connect [mac address]
     - wait for it to prompt you to accept pairing -> yes
-    - trust <mac address>
+    - trust [mac address]
     
 - run `test_controller`
 
