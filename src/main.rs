@@ -6,7 +6,7 @@ mod controller;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use imu::ImuController;
+use imu::{ImuController, Bno08xController, AnyImuController};
 use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE};
 use observation::Observation;
 use policy::Policy;
@@ -86,6 +86,11 @@ struct Args {
     #[arg(long)]
     raw_accelerometer: bool,
 
+    /// Use BNO08X IMU (BNO080/085/086) instead of the default BNO055
+    /// Connects via I2C at address 0x4A (default) on /dev/i2c-1
+    #[arg(long)]
+    bno08x: bool,
+
     /// Optional CSV log file to save observations and actions
     #[arg(long)]
     log_file: Option<String>,
@@ -159,7 +164,7 @@ struct Args {
 /// Main robot runtime
 struct Runtime {
     motor_controller: MotorController,
-    imu_controller: ImuController,
+    imu_controller: AnyImuController,
     policy: Policy,
     controller: Controller,
     control_freq: u32,
@@ -218,15 +223,23 @@ impl Runtime {
             .context("Failed to initialize motor controller")?;
         println!("✓ Motor controller initialized on {} at {} baud", args.port, args.baudrate);
 
-        // Initialize IMU controller (BNO055 on I2C)
-        let use_projected_gravity = !args.raw_accelerometer;
-        let mut imu_controller = ImuController::new_default_with_mode(use_projected_gravity)
-            .context("Failed to initialize IMU controller (BNO055 on /dev/i2c-1)")?;
-        if use_projected_gravity {
-            println!("✓ IMU controller initialized (BNO055) - using projected gravity from quaternion");
+        // Initialize IMU controller
+        let mut imu_controller = if args.bno08x {
+            let ctrl = Bno08xController::new_default()
+                .context("Failed to initialize IMU controller (BNO08X on /dev/i2c-1 at 0x4B)")?;
+            println!("✓ IMU controller initialized (BNO08X) - using projected gravity from rotation vector");
+            AnyImuController::Bno08x(ctrl)
         } else {
-            println!("✓ IMU controller initialized (BNO055) - using raw accelerometer");
-        }
+            let use_projected_gravity = !args.raw_accelerometer;
+            let ctrl = ImuController::new_default_with_mode(use_projected_gravity)
+                .context("Failed to initialize IMU controller (BNO055 on /dev/i2c-1)")?;
+            if use_projected_gravity {
+                println!("✓ IMU controller initialized (BNO055) - using projected gravity from quaternion");
+            } else {
+                println!("✓ IMU controller initialized (BNO055) - using raw accelerometer");
+            }
+            AnyImuController::Bno055(ctrl)
+        };
 
         // Set gravity offset if specified
         if args.gravity_offset_x != 0.0 || args.gravity_offset_y != 0.0 || args.gravity_offset_z != 0.0 {

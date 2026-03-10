@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use linux_embedded_hal::{Delay, I2cdev};
 use bno055::{Bno055, BNO055AxisSign, BNO055Calibration};
+use bno080::{wrapper::BNO080, interface::I2cInterface};
 use std::fs;
 use std::path::PathBuf;
 
@@ -25,6 +26,62 @@ impl Default for ImuData {
         }
     }
 }
+
+// --- Shared utility functions ---
+
+/// Median of 3 values — used for single-sample spike rejection
+fn median3(a: f64, b: f64, c: f64) -> f64 {
+    a.max(b).min(c).max(a.min(b))
+}
+
+/// Rotate a vector by the inverse of a quaternion
+/// Quaternion format: [w, x, y, z] (scalar-first convention)
+/// Used to transform from world frame to body frame
+fn quat_rotate_vec_inverse(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
+    let [w, qx, qy, qz] = quat;
+    let [vx, vy, vz] = vec;
+
+    // t = xyz × vec * 2
+    let tx = (qy * vz - qz * vy) * 2.0;
+    let ty = (qz * vx - qx * vz) * 2.0;
+    let tz = (qx * vy - qy * vx) * 2.0;
+
+    // result = vec - w * t + xyz × t
+    let cx = qy * tz - qz * ty;
+    let cy = qz * tx - qx * tz;
+    let cz = qx * ty - qy * tx;
+
+    [
+        vx - w * tx + cx,
+        vy - w * ty + cy,
+        vz - w * tz + cz,
+    ]
+}
+
+/// Normalize and apply calibration offset to a gravity vector, returning a unit vector
+fn finalize_gravity(raw: [f64; 3], offset: [f64; 3]) -> [f64; 3] {
+    let mag = (raw[0].powi(2) + raw[1].powi(2) + raw[2].powi(2)).sqrt();
+    let normalized = if mag > 0.1 {
+        [raw[0] / mag, raw[1] / mag, raw[2] / mag]
+    } else {
+        [0.0, 0.0, -1.0]
+    };
+
+    let corrected = [
+        normalized[0] - offset[0],
+        normalized[1] - offset[1],
+        normalized[2] - offset[2],
+    ];
+
+    let mag2 = (corrected[0].powi(2) + corrected[1].powi(2) + corrected[2].powi(2)).sqrt();
+    if mag2 > 0.1 {
+        [corrected[0] / mag2, corrected[1] / mag2, corrected[2] / mag2]
+    } else {
+        [0.0, 0.0, -1.0]
+    }
+}
+
+// --- BNO055 Controller ---
 
 /// IMU controller for BNO055 sensor using bno055 crate
 pub struct ImuController {
@@ -199,59 +256,6 @@ impl ImuController {
         self.gravity_offset
     }
 
-    /// Rotate a vector by a quaternion
-    /// Quaternion format: [w, x, y, z] (scalar-first convention)
-    fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
-        let [w, qx, qy, qz] = quat;
-        let [vx, vy, vz] = vec;
-
-        // Compute quaternion-vector rotation: v' = q * v * q^(-1)
-        // Using optimized formula: v' = v + 2 * cross(q.xyz, cross(q.xyz, v) + w * v)
-        let cx = qy * vz - qz * vy;
-        let cy = qz * vx - qx * vz;
-        let cz = qx * vy - qy * vx;
-
-        let cx2 = cy * qz - cz * qy + w * cx;
-        let cy2 = cz * qx - cx * qz + w * cy;
-        let cz2 = cx * qy - cy * qx + w * cz;
-
-        [
-            vx + 2.0 * cx2,
-            vy + 2.0 * cy2,
-            vz + 2.0 * cz2,
-        ]
-    }
-
-    /// Rotate a vector by the inverse of a quaternion
-    /// Quaternion format: [w, x, y, z] (scalar-first convention)
-    /// This is used to transform from world frame to body frame
-    /// Uses the formula: result = vec - w * t + xyz × t, where t = xyz × vec * 2
-    fn quat_rotate_vec_inverse(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
-        let [w, qx, qy, qz] = quat;
-        let [vx, vy, vz] = vec;
-
-        // t = xyz × vec * 2
-        let tx = (qy * vz - qz * vy) * 2.0;
-        let ty = (qz * vx - qx * vz) * 2.0;
-        let tz = (qx * vy - qy * vx) * 2.0;
-
-        // result = vec - w * t + xyz × t
-        let cx = qy * tz - qz * ty;
-        let cy = qz * tx - qx * tz;
-        let cz = qx * ty - qy * tx;
-
-        [
-            vx - w * tx + cx,
-            vy - w * ty + cy,
-            vz - w * tz + cz,
-        ]
-    }
-
-    /// Median of 3 values — used for single-sample spike rejection
-    fn median3(a: f64, b: f64, c: f64) -> f64 {
-        a.max(b).min(c).max(a.min(b))
-    }
-
     /// Read current IMU data
     /// Returns gyroscope (rad/s) and normalized projected gravity (unit vector)
     /// Projected gravity can come from either:
@@ -272,9 +276,9 @@ impl ImuController {
 
         // 3-sample median filter: eliminates single-sample spikes with no tuning required
         let gyro_rad_s = [
-            Self::median3(self.gyro_history[0][0], self.gyro_history[1][0], gyro_raw[0]),
-            Self::median3(self.gyro_history[0][1], self.gyro_history[1][1], gyro_raw[1]),
-            Self::median3(self.gyro_history[0][2], self.gyro_history[1][2], gyro_raw[2]),
+            median3(self.gyro_history[0][0], self.gyro_history[1][0], gyro_raw[0]),
+            median3(self.gyro_history[0][1], self.gyro_history[1][1], gyro_raw[1]),
+            median3(self.gyro_history[0][2], self.gyro_history[1][2], gyro_raw[2]),
         ];
         self.gyro_history[0] = self.gyro_history[1];
         self.gyro_history[1] = gyro_raw;
@@ -298,7 +302,7 @@ impl ImuController {
             // World gravity: [0, 0, -1.0] unit vector pointing downward
             // Use inverse rotation to transform from world frame to body frame
             let world_gravity = [0.0, 0.0, -1.0];
-            let proj_grav_unit = Self::quat_rotate_vec_inverse(quat, world_gravity);
+            let proj_grav_unit = quat_rotate_vec_inverse(quat, world_gravity);
 
             // Already a unit vector (or very close), but normalize to be safe
             let mag = (proj_grav_unit[0].powi(2) + proj_grav_unit[1].powi(2) + proj_grav_unit[2].powi(2)).sqrt();
@@ -366,9 +370,9 @@ impl ImuController {
 
         // 3-sample median filter on accel/projected gravity
         let accel_filtered = [
-            Self::median3(self.accel_history[0][0], self.accel_history[1][0], accel_final[0]),
-            Self::median3(self.accel_history[0][1], self.accel_history[1][1], accel_final[1]),
-            Self::median3(self.accel_history[0][2], self.accel_history[1][2], accel_final[2]),
+            median3(self.accel_history[0][0], self.accel_history[1][0], accel_final[0]),
+            median3(self.accel_history[0][1], self.accel_history[1][1], accel_final[1]),
+            median3(self.accel_history[0][2], self.accel_history[1][2], accel_final[2]),
         ];
         self.accel_history[0] = self.accel_history[1];
         self.accel_history[1] = accel_final;
@@ -390,6 +394,156 @@ impl ImuController {
             accel.y as f64,
             accel.z as f64,
         ])
+    }
+}
+
+// --- BNO08X Controller ---
+
+/// IMU controller for BNO08X sensor family (BNO080/085/086) using bno080 crate
+pub struct Bno08xController {
+    imu: BNO080<I2cInterface<I2cdev>>,
+    delay: Delay,
+    gravity_offset: [f64; 3],
+    gyro_history: [[f64; 3]; 2],
+    accel_history: [[f64; 3]; 2],
+}
+
+impl Bno08xController {
+    /// Default I2C address for BNO08X (PS0=GND, PS1=VCC selects I2C, SA0=GND → 0x4A)
+    pub const DEFAULT_ADDRESS: u8 = 0x4A;
+    /// Alternate I2C address (SA0=VCC → 0x4B)
+    pub const ALTERNATE_ADDRESS: u8 = 0x4B;
+
+    pub fn new_default() -> Result<Self> {
+        Self::new("/dev/i2c-1", Self::ALTERNATE_ADDRESS)
+    }
+
+    pub fn new(i2c_device: &str, address: u8) -> Result<Self> {
+        let i2c = I2cdev::new(i2c_device)
+            .context(format!("Failed to open I2C device: {}", i2c_device))?;
+
+        let interface = I2cInterface::new(i2c, address);
+        let mut imu = BNO080::new_with_interface(interface);
+        let mut delay = Delay;
+
+        imu.init(&mut delay)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize BNO08X: {:?}", e))?;
+
+        // Enable rotation vector at 20ms period (50Hz) for projected gravity via sensor fusion
+        imu.enable_rotation_vector(20)
+            .map_err(|e| anyhow::anyhow!("Failed to enable BNO08X rotation vector: {:?}", e))?;
+
+        // Enable gyroscope at 20ms period (50Hz)
+        imu.enable_gyro(20)
+            .map_err(|e| anyhow::anyhow!("Failed to enable BNO08X gyroscope: {:?}", e))?;
+
+        // Eat initial startup messages
+        imu.eat_all_messages(&mut delay);
+
+        Ok(Self {
+            imu,
+            delay,
+            gravity_offset: [0.0; 3],
+            gyro_history: [[0.0; 3]; 2],
+            accel_history: [[0.0; 3]; 2],
+        })
+    }
+
+    pub fn set_gravity_offset(&mut self, offset: [f64; 3]) {
+        self.gravity_offset = offset;
+        println!("Set gravity offset: [{:.4}, {:.4}, {:.4}]", offset[0], offset[1], offset[2]);
+    }
+
+    pub fn get_gravity_offset(&self) -> [f64; 3] {
+        self.gravity_offset
+    }
+
+    pub fn read(&mut self) -> Result<ImuData> {
+        // Process all pending messages from sensor (2ms timeout)
+        self.imu.handle_all_messages(&mut self.delay, 2u8);
+
+        // Read gyroscope (rad/s) — fall back to zeros if no data yet
+        let gyro_sensor = self.imu.gyro().unwrap_or([0.0; 3]);
+
+        // Apply axis remap: Robot = [-Sensor_X, -Sensor_Y, +Sensor_Z]
+        // (same physical mounting as BNO055: sensor X→backward, Y→right)
+        let gyro_raw = [
+            -gyro_sensor[0] as f64,
+            -gyro_sensor[1] as f64,
+             gyro_sensor[2] as f64,
+        ];
+
+        // 3-sample median filter
+        let gyro_filtered = [
+            median3(self.gyro_history[0][0], self.gyro_history[1][0], gyro_raw[0]),
+            median3(self.gyro_history[0][1], self.gyro_history[1][1], gyro_raw[1]),
+            median3(self.gyro_history[0][2], self.gyro_history[1][2], gyro_raw[2]),
+        ];
+        self.gyro_history[0] = self.gyro_history[1];
+        self.gyro_history[1] = gyro_raw;
+
+        // Read rotation quaternion — format: [i, j, k, real] = [x, y, z, w]
+        // Fall back to identity quaternion (upright) if no data yet
+        let q = self.imu.rotation_quaternion().unwrap_or([0.0, 0.0, 0.0, 1.0]);
+
+        // Convert to [w, x, y, z] for quat_rotate_vec_inverse
+        let quat = [q[3] as f64, q[0] as f64, q[1] as f64, q[2] as f64];
+
+        // Compute gravity in sensor frame, then remap to robot frame
+        let world_gravity = [0.0, 0.0, -1.0];
+        let grav_sensor = quat_rotate_vec_inverse(quat, world_gravity);
+        let grav_robot = [
+            -grav_sensor[0],
+            -grav_sensor[1],
+             grav_sensor[2],
+        ];
+
+        let accel_final = finalize_gravity(grav_robot, self.gravity_offset);
+
+        // 3-sample median filter on accel
+        let accel_filtered = [
+            median3(self.accel_history[0][0], self.accel_history[1][0], accel_final[0]),
+            median3(self.accel_history[0][1], self.accel_history[1][1], accel_final[1]),
+            median3(self.accel_history[0][2], self.accel_history[1][2], accel_final[2]),
+        ];
+        self.accel_history[0] = self.accel_history[1];
+        self.accel_history[1] = accel_final;
+
+        Ok(ImuData {
+            gyro: gyro_filtered,
+            accel: accel_filtered,
+        })
+    }
+}
+
+// --- Unified IMU controller ---
+
+/// Wraps either a BNO055 or BNO08X controller behind a common interface
+pub enum AnyImuController {
+    Bno055(ImuController),
+    Bno08x(Bno08xController),
+}
+
+impl AnyImuController {
+    pub fn read(&mut self) -> Result<ImuData> {
+        match self {
+            AnyImuController::Bno055(c) => c.read(),
+            AnyImuController::Bno08x(c) => c.read(),
+        }
+    }
+
+    pub fn set_gravity_offset(&mut self, offset: [f64; 3]) {
+        match self {
+            AnyImuController::Bno055(c) => c.set_gravity_offset(offset),
+            AnyImuController::Bno08x(c) => c.set_gravity_offset(offset),
+        }
+    }
+
+    pub fn get_gravity_offset(&self) -> [f64; 3] {
+        match self {
+            AnyImuController::Bno055(c) => c.get_gravity_offset(),
+            AnyImuController::Bno08x(c) => c.get_gravity_offset(),
+        }
     }
 }
 
