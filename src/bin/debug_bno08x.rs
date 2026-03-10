@@ -105,32 +105,54 @@ fn write_packet(dev: &mut I2cdev, seq: &mut [u8; 8], channel: u8, payload: &[u8]
 }
 
 fn annotate_sensor_report(payload: &[u8]) {
-    // Channel 3 payload: [0]=timestamp_type [1..5]=timestamp [5]=report_id ...
-    if payload.len() < 6 {
-        println!("    payload too short to parse");
-        return;
+    // Skip leading timestamp records (0xFB / 0xFA), each 5 bytes.
+    let mut cursor = 0;
+    while cursor + 5 <= payload.len() {
+        match payload[cursor] {
+            0xFB | 0xFA => {
+                println!("    [ts 0x{:02X}] {:02X} {:02X} {:02X} {:02X}",
+                         payload[cursor],
+                         payload[cursor+1], payload[cursor+2],
+                         payload[cursor+3], payload[cursor+4]);
+                cursor += 5;
+            }
+            _ => break,
+        }
     }
-    let ts_type = payload[0];
-    let report_id = payload[5];
-    println!("    ts_type=0x{:02X} report_id=0x{:02X} ({})", ts_type, report_id, report_name(report_id));
 
-    if payload.len() >= 19 && (report_id == 0x05 || report_id == 0x08) {
-        let i = i16::from_le_bytes([payload[9],  payload[10]]);
-        let j = i16::from_le_bytes([payload[11], payload[12]]);
-        let k = i16::from_le_bytes([payload[13], payload[14]]);
-        let w = i16::from_le_bytes([payload[15], payload[16]]);
-        println!("    quat raw: i={} j={} k={} w={}", i, j, k, w);
-        println!("    quat f64: i={:.4} j={:.4} k={:.4} w={:.4}",
-                 i as f64 / 16384.0, j as f64 / 16384.0,
-                 k as f64 / 16384.0, w as f64 / 16384.0);
-    }
-    if payload.len() >= 15 && report_id == 0x02 {
-        let x = i16::from_le_bytes([payload[9],  payload[10]]);
-        let y = i16::from_le_bytes([payload[11], payload[12]]);
-        let z = i16::from_le_bytes([payload[13], payload[14]]);
-        println!("    gyro raw: x={} y={} z={}", x, y, z);
-        println!("    gyro rad/s: x={:.4} y={:.4} z={:.4}",
-                 x as f64 / 512.0, y as f64 / 512.0, z as f64 / 512.0);
+    // Iterate through all sensor reports.
+    while cursor < payload.len() {
+        let report_id = payload[cursor];
+        match report_id {
+            0x08 | 0x05 => {
+                if cursor + 12 > payload.len() { break; }
+                let i = i16::from_le_bytes([payload[cursor+4], payload[cursor+5]]);
+                let j = i16::from_le_bytes([payload[cursor+6], payload[cursor+7]]);
+                let k = i16::from_le_bytes([payload[cursor+8], payload[cursor+9]]);
+                let w = i16::from_le_bytes([payload[cursor+10], payload[cursor+11]]);
+                println!("    [report 0x{:02X} {} seq={} status={}] quat i={} j={} k={} w={} → i={:.4} j={:.4} k={:.4} w={:.4}",
+                         report_id, report_name(report_id), payload[cursor+1], payload[cursor+2],
+                         i, j, k, w,
+                         i as f64 / 16384.0, j as f64 / 16384.0,
+                         k as f64 / 16384.0, w as f64 / 16384.0);
+                cursor += 12;
+            }
+            0x02 => {
+                if cursor + 10 > payload.len() { break; }
+                let x = i16::from_le_bytes([payload[cursor+4], payload[cursor+5]]);
+                let y = i16::from_le_bytes([payload[cursor+6], payload[cursor+7]]);
+                let z = i16::from_le_bytes([payload[cursor+8], payload[cursor+9]]);
+                println!("    [report 0x02 Gyro_Calibrated seq={} status={}] x={} y={} z={} → x={:.4} y={:.4} z={:.4} rad/s",
+                         payload[cursor+1], payload[cursor+2],
+                         x, y, z,
+                         x as f64 / 512.0, y as f64 / 512.0, z as f64 / 512.0);
+                cursor += 10;
+            }
+            _ => {
+                println!("    [report 0x{:02X} ({}) — unknown size, stopping]", report_id, report_name(report_id));
+                break;
+            }
+        }
     }
 }
 

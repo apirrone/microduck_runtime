@@ -561,47 +561,51 @@ impl Bno08xController {
             return true;  // not a sensor report (advertisement, etc.) — still counts as a packet
         }
 
-        // Payload layout for channel 3:
-        //   bytes 0-4  : 5-byte SHTP timestamp (type byte + 4-byte value, ignored)
-        //   byte  5    : sensor report_id
-        //   byte  6    : sequence number
-        //   byte  7    : status
-        //   byte  8    : delay
-        //   bytes 9-10 : data word 1 (i16 LE)
-        //   bytes 11-12: data word 2
-        //   bytes 13-14: data word 3
-        //   bytes 15-16: data word 4  (rotation vector only)
-        //   bytes 17-18: data word 5  (rotation vector accuracy, unused)
-
-        if payload.len() < 10 {
+        if payload.is_empty() {
             return true;
         }
 
-        let report_id = payload[5];
+        // Channel 3 payload layout:
+        //   One or more leading timestamp records: 0xFB (Timestamp Rebase) or
+        //   0xFA (Base Timestamp Reference), each exactly 5 bytes (type + 4-byte value).
+        //   Followed by back-to-back sensor reports, each:
+        //     [report_id(1), seq(1), status(1), delay(1), data...]
+        //   Report sizes (total bytes including header):
+        //     0x02 Gyro Calibrated:      10  (4 hdr + 3×i16 Q9)
+        //     0x08 Game Rotation Vector: 12  (4 hdr + 4×i16 Q14)
 
-        match report_id {
-            BNO08X_REPORT_ROTATION_VECTOR => {
-                if payload.len() < 17 {
-                    return true;
-                }
-                // Q14 fixed-point → f64
-                let i = i16::from_le_bytes([payload[9],  payload[10]]) as f64 / 16384.0;
-                let j = i16::from_le_bytes([payload[11], payload[12]]) as f64 / 16384.0;
-                let k = i16::from_le_bytes([payload[13], payload[14]]) as f64 / 16384.0;
-                let w = i16::from_le_bytes([payload[15], payload[16]]) as f64 / 16384.0;
-                self.last_quat = [w, i, j, k];  // [w, x, y, z]
+        // Skip all leading timestamp records.
+        let mut cursor = 0;
+        while cursor + 5 <= payload.len() {
+            match payload[cursor] {
+                0xFB | 0xFA => cursor += 5,
+                _ => break,
             }
-            BNO08X_REPORT_GYRO_CALIBRATED => {
-                if payload.len() < 15 {
-                    return true;
+        }
+
+        // Iterate through all sensor reports in this packet.
+        while cursor < payload.len() {
+            let report_id = payload[cursor];
+            match report_id {
+                BNO08X_REPORT_GYRO_CALIBRATED => {
+                    if cursor + 10 > payload.len() { break; }
+                    let x = i16::from_le_bytes([payload[cursor+4], payload[cursor+5]]) as f64 / 512.0;
+                    let y = i16::from_le_bytes([payload[cursor+6], payload[cursor+7]]) as f64 / 512.0;
+                    let z = i16::from_le_bytes([payload[cursor+8], payload[cursor+9]]) as f64 / 512.0;
+                    self.last_gyro = [x, y, z];
+                    cursor += 10;
                 }
-                // Q9 fixed-point → f64 (rad/s)
-                let x = i16::from_le_bytes([payload[9],  payload[10]]) as f64 / 512.0;
-                let y = i16::from_le_bytes([payload[11], payload[12]]) as f64 / 512.0;
-                let z = i16::from_le_bytes([payload[13], payload[14]]) as f64 / 512.0;
-                self.last_gyro = [x, y, z];
+                BNO08X_REPORT_ROTATION_VECTOR => {  // = 0x08 Game Rotation Vector
+                    if cursor + 12 > payload.len() { break; }
+                    let qi = i16::from_le_bytes([payload[cursor+4],  payload[cursor+5]])  as f64 / 16384.0;
+                    let qj = i16::from_le_bytes([payload[cursor+6],  payload[cursor+7]])  as f64 / 16384.0;
+                    let qk = i16::from_le_bytes([payload[cursor+8],  payload[cursor+9]])  as f64 / 16384.0;
+                    let qw = i16::from_le_bytes([payload[cursor+10], payload[cursor+11]]) as f64 / 16384.0;
+                    self.last_quat = [qw, qi, qj, qk];  // [w, x, y, z]
+                    cursor += 12;
+                }
+                _ => break,  // unknown report ID — can't determine its size, stop here
             }
-            _ => {}
         }
 
         true
