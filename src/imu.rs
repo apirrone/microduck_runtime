@@ -601,7 +601,6 @@ impl Bno08xController {
                     let qj = i16::from_le_bytes([payload[cursor+6],  payload[cursor+7]])  as f64 / 16384.0;
                     let qk = i16::from_le_bytes([payload[cursor+8],  payload[cursor+9]])  as f64 / 16384.0;
                     let qw = i16::from_le_bytes([payload[cursor+10], payload[cursor+11]]) as f64 / 16384.0;
-                    eprintln!("[DBG RV] i={:.4} j={:.4} k={:.4} w={:.4}", qi, qj, qk, qw);
                     self.last_quat = [qw, qi, qj, qk];  // [w, x, y, z]
                     cursor += 12;
                 }
@@ -622,13 +621,23 @@ impl Bno08xController {
     }
 
     pub fn read(&mut self) -> Result<ImuData> {
-        // Drain all packets that are ready right now (stop when sensor NACKs).
-        // This ensures we always have the most recent data and never get stuck
-        // waiting when the sensor has nothing ready.
-        for _ in 0..20 {
-            if !self.drain_once() {
-                break;
+        // Drain all ready packets. If none are ready, wait up to ~15ms for the
+        // sensor's next report (reports are enabled at 5ms period). Without this
+        // retry, a call that arrives just after the previous drain clears the
+        // buffer would immediately get a NACK and return stale data every time.
+        let mut got_any = false;
+        'outer: for _attempt in 0..3 {
+            for _ in 0..20 {
+                if self.drain_once() {
+                    got_any = true;
+                } else {
+                    break;
+                }
             }
+            if got_any {
+                break 'outer;
+            }
+            thread::sleep(Duration::from_millis(5));
         }
 
         // Apply axis remap: Robot = [-Sensor_X, -Sensor_Y, +Sensor_Z]
