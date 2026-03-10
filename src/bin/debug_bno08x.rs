@@ -57,53 +57,35 @@ fn hex(buf: &[u8]) -> String {
     buf.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ")
 }
 
-/// Try to read one SHTP packet (single-step: 4 bytes for header only).
-/// Returns None on NACK (no data). Returns Some((channel, full_payload_including_header)).
+/// Try to read one SHTP packet using a single 300-byte I2C transaction.
+/// The BNO08X advances its read pointer on every STOP, so one transaction = one packet.
+/// Extra bytes beyond the packet are returned as 0xFF by the sensor (per SHTP spec).
 fn try_read_packet(dev: &mut I2cdev) -> Option<(u8, Vec<u8>)> {
-    // Step 1: read header
-    let mut hdr = [0u8; 4];
-    if dev.read(ADDR, &mut hdr).is_err() {
+    let mut buf = [0u8; 300];
+    if dev.read(ADDR, &mut buf).is_err() {
         return None; // NACK = no data
     }
-    let total_len = ((hdr[1] as usize & 0x7F) << 8) | hdr[0] as usize;
-    let channel = hdr[2];
-    let seq = hdr[3];
 
-    println!("  [HDR] raw={} total_len={} channel={} ({}) seq={}",
-             hex(&hdr), total_len, channel, channel_name(channel), seq);
+    let total_len = ((buf[1] as usize & 0x7F) << 8) | buf[0] as usize;
+    let channel = buf[2];
+    let seq = buf[3];
+    let continuation = buf[1] & 0x80 != 0;
 
-    if total_len < 4 || total_len > 256 {
-        println!("  [HDR] bad length, skipping");
+    println!("  [PKT] raw_hdr={} total_len={} channel={} ({}) seq={} continuation={}",
+             hex(&buf[0..4]), total_len, channel, channel_name(channel), seq, continuation);
+
+    if total_len < 4 {
+        println!("  [PKT] bad length, skipping");
         return None;
     }
     if total_len == 4 {
-        println!("  [PKT] empty packet (header only)");
+        println!("  [PKT] header-only (empty payload)");
         return Some((channel, vec![]));
     }
 
-    // Step 2a: try reading just the payload (total_len - 4 bytes)
-    // This is to see whether the sensor advances or resets its pointer.
-    let payload_len = total_len - 4;
-    let mut payload_only = vec![0u8; payload_len];
-    let step2a_ok = dev.read(ADDR, &mut payload_only).is_ok();
-
-    if step2a_ok {
-        println!("  [2-step-PAYLOAD] ({} bytes): {}", payload_len, hex(&payload_only));
-    } else {
-        println!("  [2-step-PAYLOAD] NACK (sensor reset pointer? trying full re-read)");
-
-        // Step 2b: re-read full packet (total_len bytes) — pointer was reset
-        let mut full = vec![0u8; total_len];
-        if dev.read(ADDR, &mut full).is_err() {
-            println!("  [2-step-FULL] NACK too, giving up on this packet");
-            return None;
-        }
-        println!("  [2-step-FULL] ({} bytes): {}", total_len, hex(&full));
-        let payload = full[4..].to_vec();
-        return Some((channel, payload));
-    }
-
-    Some((channel, payload_only))
+    let payload_end = total_len.min(buf.len());
+    let payload = buf[4..payload_end].to_vec();
+    Some((channel, payload))
 }
 
 fn write_packet(dev: &mut I2cdev, seq: &mut [u8; 8], channel: u8, payload: &[u8]) -> Result<()> {
