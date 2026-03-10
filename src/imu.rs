@@ -601,6 +601,7 @@ impl Bno08xController {
                     let qj = i16::from_le_bytes([payload[cursor+6],  payload[cursor+7]])  as f64 / 16384.0;
                     let qk = i16::from_le_bytes([payload[cursor+8],  payload[cursor+9]])  as f64 / 16384.0;
                     let qw = i16::from_le_bytes([payload[cursor+10], payload[cursor+11]]) as f64 / 16384.0;
+                    eprintln!("[DBG RV] i={:.4} j={:.4} k={:.4} w={:.4}", qi, qj, qk, qw);
                     self.last_quat = [qw, qi, qj, qk];  // [w, x, y, z]
                     cursor += 12;
                 }
