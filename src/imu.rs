@@ -522,11 +522,12 @@ impl Bno08xController {
     /// Returns `None` when the sensor NACKs (no data ready).  This is the normal
     /// "no new data" case and must NOT be treated as an error.
     ///
-    /// The BNO08X requires two I2C read transactions per packet:
+    /// The BNO08X resets its internal read pointer to byte 0 after each I2C STOP
+    /// condition, so a two-step approach is required:
     /// 1. Read 4-byte header → extract total packet length
-    /// 2. Read remaining (length - 4) bytes → payload
+    /// 2. Read exactly total_len bytes → re-reads header + payload from byte 0
     fn read_shtp_packet(&mut self) -> Option<(u8, Vec<u8>)> {
-        // --- Step 1: header ---
+        // --- Step 1: header (4 bytes) ---
         let mut hdr = [0u8; 4];
         if self.dev.read(self.addr, &mut hdr).is_err() {
             return None;  // NACK = sensor has no data ready, not an error
@@ -535,22 +536,24 @@ impl Bno08xController {
         // Bit 15 of the length field is the "continuation" flag; mask it out.
         let total_len = ((hdr[1] as usize & 0x7F) << 8) | hdr[0] as usize;
         let channel = hdr[2];
-        // hdr[3] = receive sequence number (ignored)
 
-        if total_len == 0 || total_len > 512 {
-            return None;  // guard against corrupted header
+        if total_len < 4 || total_len > 256 {
+            return None;  // guard against zero/corrupted header
         }
-        if total_len <= 4 {
-            return Some((channel, vec![]));  // empty packet (valid)
+        if total_len == 4 {
+            return Some((channel, vec![]));  // header-only packet (valid)
         }
 
-        // --- Step 2: payload ---
-        let payload_len = total_len - 4;
-        let mut payload = vec![0u8; payload_len];
-        if self.dev.read(self.addr, &mut payload).is_err() {
+        // --- Step 2: full packet re-read ---
+        // After the STOP from step 1, the sensor resets its pointer to byte 0.
+        // We read total_len bytes to get the complete packet (header + payload).
+        let mut buf = vec![0u8; total_len];
+        if self.dev.read(self.addr, &mut buf).is_err() {
             return None;
         }
 
+        // buf[0..4] = header (same as hdr), buf[4..] = payload
+        let payload = buf[4..].to_vec();
         Some((channel, payload))
     }
 
