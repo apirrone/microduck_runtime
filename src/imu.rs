@@ -536,7 +536,9 @@ impl Bno08xController {
     /// its read pointer on every I2C STOP condition — a separate header-only read
     /// would consume the packet before we can read its payload.
     fn read_shtp_packet(&mut self) -> Option<(u8, Vec<u8>)> {
-        let mut buf = [0u8; 300];
+        // 128 bytes covers all sensor report packets (gyro+quat ≈ 36 bytes, max ~60 bytes).
+        // Smaller buffer means faster reads — critical for the spin-poll retry loop.
+        let mut buf = [0u8; 128];
         if self.dev.read(self.addr, &mut buf).is_err() {
             // Either NACK (no data ready) or EIO (clock-stretch timeout from BCM2835 I2C).
             // Both are transient — treat as "no data, try again".
