@@ -637,32 +637,31 @@ impl Bno08xController {
     }
 
     pub fn read(&mut self) -> Result<ImuData> {
-        // Drain whatever is buffered right now.
+        // Drain whatever is buffered right now (bounded to avoid spinning on reset loops).
         // This also sets needs_reconfigure if we see ch=0 advertisement packets.
-        while self.drain_once() {}
+        for _ in 0..10 { if !self.drain_once() { break; } }
 
         // If the sensor reset, re-configure it before reading.
         if self.needs_reconfigure {
             self.needs_reconfigure = false;
             let _ = self.configure_reports(5_000);
-            thread::sleep(Duration::from_millis(50));
-            while self.drain_once() {}
+            thread::sleep(Duration::from_millis(100));  // give sensor time to start reporting
+            for _ in 0..10 { if !self.drain_once() { break; } }
         }
 
-        // Poll with 2ms sleep on each miss — this matches the debug_bno08x
-        // polling pattern that is known to work.  The BCM2835 I2C controller
-        // gives EIO on clock-stretch, but the sensor resolves the stretch
-        // within 1-2ms.  Continuous polling catches the "data-ready" window.
-        let deadline = std::time::Instant::now() + Duration::from_millis(50);
+        // Spin-poll until we get a sensor report (or timeout after 100ms).
+        // No sleep between attempts: each EIO takes only ~640µs (BCM2835 clock-stretch
+        // timeout), so spinning gives ~1500 retries/second to catch the brief window
+        // when the sensor's data is fully ready and it won't clock-stretch.
+        let deadline = std::time::Instant::now() + Duration::from_millis(100);
         loop {
             if self.drain_once() {
-                while self.drain_once() {}  // drain any further back-to-back packets
+                for _ in 0..10 { if !self.drain_once() { break; } }
                 break;
             }
             if std::time::Instant::now() >= deadline {
                 break;  // sensor not responding; return cached values
             }
-            thread::sleep(Duration::from_millis(2));
         }
 
         // Apply axis remap: Robot = [-Sensor_X, -Sensor_Y, +Sensor_Z]
