@@ -142,7 +142,7 @@ echo ""
 echo -e "${GREEN}Which IMU is installed on your robot?${NC}"
 echo "  1) BNO055 (default)"
 echo "  2) BNO08X (BNO080/085/086)"
-read -r -p "Enter choice [1/2, default=1]: " IMU_CHOICE
+read -r -p "Enter choice [1/2, default=1]: " IMU_CHOICE </dev/tty
 case "$IMU_CHOICE" in
     2)
         IMU_FLAG="--bno08x"
@@ -161,7 +161,7 @@ SERVICE_DIR="/etc/systemd/system"
 if [ -f "$SERVICE_NAME" ]; then
     echo -e "${GREEN}Install systemd service?${NC}"
     echo "  This will start the runtime automatically on boot."
-    read -r -p "Install service? [y/N, default=N]: " SERVICE_CHOICE
+    read -r -p "Install service? [y/N, default=N]: " SERVICE_CHOICE </dev/tty
     case "$SERVICE_CHOICE" in
         y|Y)
             echo "Installing systemd service..."
