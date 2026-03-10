@@ -64,6 +64,7 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/em dist/
           cp target/aarch64-unknown-linux-gnu/release/check_voltage dist/
           cp target/aarch64-unknown-linux-gnu/release/microduck_help dist/
+          cp target/aarch64-unknown-linux-gnu/release/debug_bno08x dist/
           # Copy policies
           cp -r policies dist/
           # Copy systemd service file
@@ -71,7 +72,7 @@ jobs:
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw calibrate_imu test_controller init em check_voltage microduck_help policies microduck_runtime.service libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw calibrate_imu test_controller init em check_voltage microduck_help debug_bno08x policies microduck_runtime.service libonnxruntime.so*
           cd ..
 
       - name: Create Release
@@ -101,6 +102,7 @@ jobs:
             - **em**: Emergency stop — disable motor torque
             - **check_voltage**: Read present input voltage for all motors
             - **microduck_help**: List all available commands
+            - **debug_bno08x**: BNO08X SHTP raw packet debugger
             - **policies/**: Bundled ONNX policy models
             - **libonnxruntime.so**: ONNX Runtime library
         env:

@@ -43,6 +43,10 @@ path = "src/bin/check_voltage.rs"
 name = "microduck_help"
 path = "src/bin/microduck_help.rs"
 
+[[bin]]
+name = "debug_bno08x"
+path = "src/bin/debug_bno08x.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }

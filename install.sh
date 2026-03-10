@@ -86,7 +86,7 @@ if [ ! -f "$BINARY_NAME" ]; then
     exit 1
 fi
 
-OPTIONAL_BINS="test_imu calibrate_imu test_i2c_raw test_controller init em check_voltage microduck_help"
+OPTIONAL_BINS="test_imu calibrate_imu test_i2c_raw test_controller init em check_voltage microduck_help debug_bno08x"
 for bin in $OPTIONAL_BINS; do
     if [ ! -f "$bin" ]; then
         echo -e "${YELLOW}Warning: $bin binary not found in archive.${NC}"
