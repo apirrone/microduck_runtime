@@ -529,8 +529,13 @@ impl Bno08xController {
     /// would consume the packet before we can read its payload.
     fn read_shtp_packet(&mut self) -> Option<(u8, Vec<u8>)> {
         let mut buf = [0u8; 300];
-        if self.dev.read(self.addr, &mut buf).is_err() {
-            return None;  // NACK = sensor has no data ready, not an error
+        if let Err(e) = self.dev.read(self.addr, &mut buf) {
+            let s = format!("{:?}", e);
+            // EREMOTEIO (121) = NACK = no data ready, normal case. Other errors are unexpected.
+            if !s.contains("121") {
+                eprintln!("[BNO08X] unexpected I2C error: {}", s);
+            }
+            return None;
         }
 
         // Bit 15 of length MSB is the "continuation" flag for multi-packet msgs.
@@ -558,6 +563,7 @@ impl Bno08xController {
         };
 
         if channel != BNO08X_CHANNEL_REPORTS {
+            eprintln!("[BNO08X drain] non-report packet ch={} payload_len={}", channel, payload.len());
             return true;  // not a sensor report (advertisement, etc.) — still counts as a packet
         }
 
@@ -626,10 +632,12 @@ impl Bno08xController {
         // retry, a call that arrives just after the previous drain clears the
         // buffer would immediately get a NACK and return stale data every time.
         let mut got_any = false;
+        let mut drained = 0u32;
         'outer: for _attempt in 0..3 {
             for _ in 0..20 {
                 if self.drain_once() {
                     got_any = true;
+                    drained += 1;
                 } else {
                     break;
                 }
@@ -639,6 +647,11 @@ impl Bno08xController {
             }
             thread::sleep(Duration::from_millis(5));
         }
+        // Temporary diagnostics — remove once stable
+        eprintln!("[BNO08X read] drained={} quat=[{:.3},{:.3},{:.3},{:.3}] gyro=[{:.3},{:.3},{:.3}]",
+            drained,
+            self.last_quat[0], self.last_quat[1], self.last_quat[2], self.last_quat[3],
+            self.last_gyro[0], self.last_gyro[1], self.last_gyro[2]);
 
         // Apply axis remap: Robot = [-Sensor_X, -Sensor_Y, +Sensor_Z]
         let gyro_raw = [
