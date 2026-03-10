@@ -423,6 +423,7 @@ pub struct Bno08xController {
     gravity_offset: [f64; 3],
     gyro_history: [[f64; 3]; 2],
     accel_history: [[f64; 3]; 2],
+    needs_reconfigure: bool,   // set when a sensor reset is detected (ch=0 advertisement seen)
 }
 
 impl Bno08xController {
@@ -448,12 +449,34 @@ impl Bno08xController {
             gravity_offset: [0.0; 3],
             gyro_history: [[0.0; 3]; 2],
             accel_history: [[0.0; 3]; 2],
+            needs_reconfigure: false,
         };
 
         ctrl.shtp_init()
             .context("Failed to initialize BNO08X over SHTP")?;
 
         Ok(ctrl)
+    }
+
+    /// Enable Game Rotation Vector and Gyro Calibrated reports at the given period.
+    fn configure_reports(&mut self, period_us: u32) -> Result<()> {
+        let p = period_us.to_le_bytes();
+        self.write_packet(BNO08X_CHANNEL_CONTROL, &[
+            BNO08X_CMD_SET_FEATURE, BNO08X_REPORT_ROTATION_VECTOR,
+            0, 0, 0,
+            p[0], p[1], p[2], p[3],
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+        ])?;
+        thread::sleep(Duration::from_millis(10));
+        self.write_packet(BNO08X_CHANNEL_CONTROL, &[
+            BNO08X_CMD_SET_FEATURE, BNO08X_REPORT_GYRO_CALIBRATED,
+            0, 0, 0,
+            p[0], p[1], p[2], p[3],
+            0, 0, 0, 0,
+            0, 0, 0, 0,
+        ])?;
+        Ok(())
     }
 
     /// Initialise the BNO08X: soft-reset, drain startup packets, enable reports.
@@ -468,26 +491,8 @@ impl Bno08xController {
             thread::sleep(Duration::from_millis(5));
         }
 
-        // Enable rotation vector at 5 ms period (200 Hz)
-        let period_us: u32 = 5_000;
-        let p = period_us.to_le_bytes();
-        self.write_packet(BNO08X_CHANNEL_CONTROL, &[
-            BNO08X_CMD_SET_FEATURE, BNO08X_REPORT_ROTATION_VECTOR,
-            0, 0, 0,                          // flags, change-sensitivity LSB/MSB
-            p[0], p[1], p[2], p[3],           // report interval (μs, LE)
-            0, 0, 0, 0,                        // batch interval
-            0, 0, 0, 0,                        // sensor-specific config
-        ])?;
-        thread::sleep(Duration::from_millis(10));
-
-        // Enable gyro calibrated at 5 ms period (200 Hz)
-        self.write_packet(BNO08X_CHANNEL_CONTROL, &[
-            BNO08X_CMD_SET_FEATURE, BNO08X_REPORT_GYRO_CALIBRATED,
-            0, 0, 0,
-            p[0], p[1], p[2], p[3],
-            0, 0, 0, 0,
-            0, 0, 0, 0,
-        ])?;
+        // Enable rotation vector and gyro at 5 ms period (200 Hz)
+        self.configure_reports(5_000)?;
         thread::sleep(Duration::from_millis(50));
 
         // Prime internal state with a few real readings
@@ -495,6 +500,9 @@ impl Bno08xController {
             self.drain_once();
             thread::sleep(Duration::from_millis(5));
         }
+
+        // Clear any reset flag that may have been set during the init drain
+        self.needs_reconfigure = false;
 
         Ok(())
     }
@@ -529,12 +537,9 @@ impl Bno08xController {
     /// would consume the packet before we can read its payload.
     fn read_shtp_packet(&mut self) -> Option<(u8, Vec<u8>)> {
         let mut buf = [0u8; 300];
-        if let Err(e) = self.dev.read(self.addr, &mut buf) {
-            let s = format!("{:?}", e);
-            // EREMOTEIO (121) = NACK = no data ready, normal case. Other errors are unexpected.
-            if !s.contains("121") {
-                eprintln!("[BNO08X] unexpected I2C error: {}", s);
-            }
+        if self.dev.read(self.addr, &mut buf).is_err() {
+            // Either NACK (no data ready) or EIO (clock-stretch timeout from BCM2835 I2C).
+            // Both are transient — treat as "no data, try again".
             return None;
         }
 
@@ -562,9 +567,14 @@ impl Bno08xController {
             None => return false,
         };
 
+        if channel == 0 {
+            // SHTP advertisement = sensor just reset. Schedule re-configuration.
+            self.needs_reconfigure = true;
+            return true;
+        }
+
         if channel != BNO08X_CHANNEL_REPORTS {
-            eprintln!("[BNO08X drain] non-report packet ch={} payload_len={}", channel, payload.len());
-            return true;  // not a sensor report (advertisement, etc.) — still counts as a packet
+            return true;  // control/executable packet — not a sensor report
         }
 
         if payload.is_empty() {
@@ -627,31 +637,33 @@ impl Bno08xController {
     }
 
     pub fn read(&mut self) -> Result<ImuData> {
-        // Drain all ready packets. If none are ready, wait up to ~15ms for the
-        // sensor's next report (reports are enabled at 5ms period). Without this
-        // retry, a call that arrives just after the previous drain clears the
-        // buffer would immediately get a NACK and return stale data every time.
-        let mut got_any = false;
-        let mut drained = 0u32;
-        'outer: for _attempt in 0..3 {
-            for _ in 0..20 {
-                if self.drain_once() {
-                    got_any = true;
-                    drained += 1;
-                } else {
-                    break;
-                }
-            }
-            if got_any {
-                break 'outer;
-            }
-            thread::sleep(Duration::from_millis(5));
+        // Drain whatever is buffered right now.
+        // This also sets needs_reconfigure if we see ch=0 advertisement packets.
+        while self.drain_once() {}
+
+        // If the sensor reset, re-configure it before reading.
+        if self.needs_reconfigure {
+            self.needs_reconfigure = false;
+            let _ = self.configure_reports(5_000);
+            thread::sleep(Duration::from_millis(50));
+            while self.drain_once() {}
         }
-        // Temporary diagnostics — remove once stable
-        eprintln!("[BNO08X read] drained={} quat=[{:.3},{:.3},{:.3},{:.3}] gyro=[{:.3},{:.3},{:.3}]",
-            drained,
-            self.last_quat[0], self.last_quat[1], self.last_quat[2], self.last_quat[3],
-            self.last_gyro[0], self.last_gyro[1], self.last_gyro[2]);
+
+        // Poll with 2ms sleep on each miss — this matches the debug_bno08x
+        // polling pattern that is known to work.  The BCM2835 I2C controller
+        // gives EIO on clock-stretch, but the sensor resolves the stretch
+        // within 1-2ms.  Continuous polling catches the "data-ready" window.
+        let deadline = std::time::Instant::now() + Duration::from_millis(50);
+        loop {
+            if self.drain_once() {
+                while self.drain_once() {}  // drain any further back-to-back packets
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;  // sensor not responding; return cached values
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
 
         // Apply axis remap: Robot = [-Sensor_X, -Sensor_Y, +Sensor_Z]
         let gyro_raw = [
