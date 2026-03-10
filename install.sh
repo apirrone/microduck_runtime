@@ -137,17 +137,49 @@ else
     done
 fi
 
-# Install systemd service (if service file is present in archive)
+# Ask which IMU is installed
+echo ""
+echo -e "${GREEN}Which IMU is installed on your robot?${NC}"
+echo "  1) BNO055 (default)"
+echo "  2) BNO08X (BNO080/085/086)"
+read -r -p "Enter choice [1/2, default=1]: " IMU_CHOICE
+case "$IMU_CHOICE" in
+    2)
+        IMU_FLAG="--bno08x"
+        echo -e "  → Using ${GREEN}BNO08X${NC}"
+        ;;
+    *)
+        IMU_FLAG=""
+        echo -e "  → Using ${GREEN}BNO055${NC}"
+        ;;
+esac
+echo ""
+
+# Ask whether to install the systemd service
 SERVICE_NAME="microduck_runtime.service"
 SERVICE_DIR="/etc/systemd/system"
 if [ -f "$SERVICE_NAME" ]; then
-    echo "Installing systemd service..."
-    sudo cp "$SERVICE_NAME" "$SERVICE_DIR/"
-    sudo systemctl daemon-reload
-    sudo systemctl enable "$SERVICE_NAME"
-    echo -e "${GREEN}✓ Service installed and enabled (starts on boot)${NC}"
-    echo "  Start now:  sudo systemctl start microduck_runtime"
-    echo "  View logs:  journalctl -u microduck_runtime -f"
+    echo -e "${GREEN}Install systemd service?${NC}"
+    echo "  This will start the runtime automatically on boot."
+    read -r -p "Install service? [y/N, default=N]: " SERVICE_CHOICE
+    case "$SERVICE_CHOICE" in
+        y|Y)
+            echo "Installing systemd service..."
+            # Patch ExecStart with the IMU flag if needed
+            if [ -n "$IMU_FLAG" ]; then
+                sed -i "s|ExecStart=/usr/local/bin/microduck_runtime$|ExecStart=/usr/local/bin/microduck_runtime $IMU_FLAG|" "$SERVICE_NAME"
+            fi
+            sudo cp "$SERVICE_NAME" "$SERVICE_DIR/"
+            sudo systemctl daemon-reload
+            sudo systemctl enable "$SERVICE_NAME"
+            echo -e "${GREEN}✓ Service installed and enabled (starts on boot)${NC}"
+            echo "  Start now:  sudo systemctl start microduck_runtime"
+            echo "  View logs:  journalctl -u microduck_runtime -f"
+            ;;
+        *)
+            echo -e "  → ${YELLOW}Skipping service installation${NC}"
+            ;;
+    esac
 else
     echo -e "${YELLOW}Note: $SERVICE_NAME not found in archive, skipping service setup.${NC}"
 fi

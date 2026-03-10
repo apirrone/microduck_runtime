@@ -429,16 +429,14 @@ impl Bno08xController {
         imu.init(&mut delay)
             .map_err(|e| anyhow::anyhow!("Failed to initialize BNO08X: {:?}", e))?;
 
-        // Enable rotation vector at 20ms period (50Hz) for projected gravity via sensor fusion
-        imu.enable_rotation_vector(20)
+        // Enable rotation vector and gyro at 5ms period (200Hz).
+        // Running faster than the 50Hz control loop ensures data is always
+        // queued and ready when we poll, avoiding stale reads.
+        imu.enable_rotation_vector(5)
             .map_err(|e| anyhow::anyhow!("Failed to enable BNO08X rotation vector: {:?}", e))?;
 
-        // Enable gyroscope at 20ms period (50Hz)
-        imu.enable_gyro(20)
+        imu.enable_gyro(5)
             .map_err(|e| anyhow::anyhow!("Failed to enable BNO08X gyroscope: {:?}", e))?;
-
-        // Eat initial startup messages
-        imu.eat_all_messages(&mut delay);
 
         Ok(Self {
             imu,
@@ -459,8 +457,9 @@ impl Bno08xController {
     }
 
     pub fn read(&mut self) -> Result<ImuData> {
-        // Process all pending messages from sensor (2ms timeout)
-        self.imu.handle_all_messages(&mut self.delay, 2u8);
+        // Process all pending messages. 8ms timeout: sensor sends every 5ms,
+        // so within 8ms we're guaranteed at least one fresh packet.
+        self.imu.handle_all_messages(&mut self.delay, 8u8);
 
         // Read gyroscope (rad/s) — fall back to zeros if no data yet
         let gyro_sensor = self.imu.gyro().unwrap_or([0.0; 3]);
