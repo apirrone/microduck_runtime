@@ -478,15 +478,13 @@ impl ShtpDevice {
             let _ = self.read_packet();
             thread::sleep(Duration::from_millis(5));
         }
-        self.configure_reports(5_000)?;  // enable at 200 Hz
+        self.configure_reports(10_000)?;  // enable at 100 Hz (less EIO pressure)
         thread::sleep(Duration::from_millis(50));
         Ok(())
     }
 }
 
-/// Background poll loop — mirrors the `debug_bno08x` Phase 5 loop that is confirmed working.
-/// Runs continuously so the sensor is always being drained, avoiding BCM2835 clock-stretch
-/// timeout accumulation that occurs when reads are spaced >~10ms apart.
+/// Background poll loop — runs continuously, mirroring the `debug_bno08x` approach.
 fn bno08x_poll_thread(
     i2c_device: String,
     addr: u8,
@@ -504,17 +502,26 @@ fn bno08x_poll_thread(
     let _ = init_tx.send(Ok(()));  // unblock constructor
 
     let mut needs_reconfigure = false;
+    let mut last_data = std::time::Instant::now();
 
     while !stop.load(Ordering::Relaxed) {
+        // Watchdog: BCM2835 EIO errors cause the sensor to reset, and the reconfigure
+        // loop can get stuck. If no ch=3 data arrives for 1s, force a full reinit.
+        if last_data.elapsed() > Duration::from_millis(1000) {
+            let _ = dev.shtp_init();
+            needs_reconfigure = false;
+            last_data = std::time::Instant::now();
+            continue;
+        }
+
         match dev.read_packet() {
             None => {
-                // NACK or EIO. If a reset was detected earlier, now is the time to reconfigure.
                 if needs_reconfigure {
                     needs_reconfigure = false;
-                    if dev.configure_reports(5_000).is_err() {
-                        needs_reconfigure = true;  // retry next miss
+                    if dev.configure_reports(10_000).is_err() {
+                        needs_reconfigure = true;
                     } else {
-                        thread::sleep(Duration::from_millis(50));
+                        thread::sleep(Duration::from_millis(100));
                     }
                 } else {
                     thread::sleep(Duration::from_millis(1));
@@ -522,7 +529,6 @@ fn bno08x_poll_thread(
             }
             Some((channel, payload)) => {
                 if channel == 0 {
-                    // SHTP advertisement = sensor just reset; schedule reconfiguration
                     needs_reconfigure = true;
                     continue;
                 }
@@ -569,6 +575,11 @@ fn bno08x_poll_thread(
                     let mut state = shared.lock().unwrap();
                     if let Some(g) = gyro_update { state.last_gyro = g; }
                     if let Some(q) = quat_update { state.last_quat = q; }
+                    last_data = std::time::Instant::now();
+                    // Sleep briefly after a successful read so we don't immediately
+                    // re-read while the sensor is preparing its next packet (which
+                    // triggers the BCM2835 clock-stretch timeout → EIO → sensor reset).
+                    thread::sleep(Duration::from_millis(4));
                 }
             }
         }
