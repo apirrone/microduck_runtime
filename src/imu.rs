@@ -550,6 +550,7 @@ fn bno08x_poll_thread(
 
                 while cursor < payload.len() {
                     match payload[cursor] {
+                        0xFB | 0xFA => { cursor += 5; }  // timestamp records can appear between reports
                         BNO08X_REPORT_GYRO_CALIBRATED => {
                             if cursor + 10 > payload.len() { break; }
                             let x = i16::from_le_bytes([payload[cursor+4], payload[cursor+5]]) as f64 / 512.0;
@@ -559,13 +560,13 @@ fn bno08x_poll_thread(
                             cursor += 10;
                         }
                         BNO08X_REPORT_ROTATION_VECTOR => {
-                            if cursor + 12 > payload.len() { break; }
+                            if cursor + 14 > payload.len() { break; }
                             let qi = i16::from_le_bytes([payload[cursor+4],  payload[cursor+5]])  as f64 / 16384.0;
                             let qj = i16::from_le_bytes([payload[cursor+6],  payload[cursor+7]])  as f64 / 16384.0;
                             let qk = i16::from_le_bytes([payload[cursor+8],  payload[cursor+9]])  as f64 / 16384.0;
                             let qw = i16::from_le_bytes([payload[cursor+10], payload[cursor+11]]) as f64 / 16384.0;
                             quat_update = Some([qw, qi, qj, qk]);
-                            cursor += 12;
+                            cursor += 14;  // 14 bytes: 4 header + 8 quat + 2 accuracy estimate
                         }
                         _ => break,
                     }
