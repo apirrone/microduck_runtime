@@ -725,7 +725,7 @@ impl Bno08xController {
         self.gyro_history[1] = gyro_raw;
 
         let world_gravity = [0.0, 0.0, -1.0];
-        let grav_sensor = quat_rotate_vec(last_quat, world_gravity);
+        let grav_sensor = quat_rotate_vec_inverse(last_quat, world_gravity);
         let grav_robot = [grav_sensor[0], grav_sensor[1], grav_sensor[2]];
         let accel_final = finalize_gravity(grav_robot, self.gravity_offset);
 
