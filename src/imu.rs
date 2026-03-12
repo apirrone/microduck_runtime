@@ -480,16 +480,20 @@ impl ShtpDevice {
             .map_err(|e| anyhow::anyhow!("BNO08X I2C write failed: {:?}", e))
     }
 
-    fn configure_reports(&mut self, period_us: u32) -> Result<()> {
-        let p = period_us.to_le_bytes();
+    fn configure_reports(&mut self, gyro_period_us: u32) -> Result<()> {
+        // Rotation vector runs at 2× the gyro period (half rate) to reduce the
+        // frequency of BCM2835 clock-stretch EIO caused by sensor fusion computation.
+        let quat_period_us = gyro_period_us * 2;
+        let g = gyro_period_us.to_le_bytes();
+        let q = quat_period_us.to_le_bytes();
         self.write_packet(BNO08X_CHANNEL_CONTROL, &[
             BNO08X_CMD_SET_FEATURE, BNO08X_REPORT_ROTATION_VECTOR,
-            0, 0, 0, p[0], p[1], p[2], p[3], 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, q[0], q[1], q[2], q[3], 0, 0, 0, 0, 0, 0, 0, 0,
         ])?;
         thread::sleep(Duration::from_millis(10));
         self.write_packet(BNO08X_CHANNEL_CONTROL, &[
             BNO08X_CMD_SET_FEATURE, BNO08X_REPORT_GYRO_CALIBRATED,
-            0, 0, 0, p[0], p[1], p[2], p[3], 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, g[0], g[1], g[2], g[3], 0, 0, 0, 0, 0, 0, 0, 0,
         ])
     }
 
@@ -525,14 +529,26 @@ fn bno08x_poll_thread(
 
     let mut needs_reconfigure = false;
     let mut last_data = std::time::Instant::now();
+    let mut last_quat_data = std::time::Instant::now();
 
     while !stop.load(Ordering::Relaxed) {
-        // Watchdog: BCM2835 EIO errors cause the sensor to reset, and the reconfigure
-        // loop can get stuck. If no ch=3 data arrives for 1s, force a full reinit.
+        // General watchdog: no ch=3 data at all for 1s → full reinit.
         if last_data.elapsed() > Duration::from_millis(1000) {
             let _ = dev.shtp_init();
             needs_reconfigure = false;
             last_data = std::time::Instant::now();
+            last_quat_data = std::time::Instant::now();
+            continue;
+        }
+
+        // Quat-specific watchdog: rotation vector (0x08) causes heavier sensor fusion
+        // → more BCM2835 clock-stretch EIO. Gyro packets keep arriving (resetting
+        // last_data), so the general watchdog never fires. Track quat separately.
+        if last_quat_data.elapsed() > Duration::from_millis(2000) {
+            let _ = dev.shtp_init();
+            needs_reconfigure = false;
+            last_data = std::time::Instant::now();
+            last_quat_data = std::time::Instant::now();
             continue;
         }
 
@@ -612,6 +628,7 @@ fn bno08x_poll_thread(
                     if let Some(g) = gyro_update { state.last_gyro = g; }
                     if let Some(q) = quat_update { state.last_quat = q; }
                     last_data = std::time::Instant::now();
+                    if quat_update.is_some() { last_quat_data = std::time::Instant::now(); }
                     // Sleep briefly after a successful read so we don't immediately
                     // re-read while the sensor is preparing its next packet (which
                     // triggers the BCM2835 clock-stretch timeout → EIO → sensor reset).
