@@ -38,9 +38,9 @@ fn median3(a: f64, b: f64, c: f64) -> f64 {
     a.max(b).min(c).max(a.min(b))
 }
 
-/// Rotate a vector by the inverse of a quaternion
+/// Rotate a vector by the inverse of a quaternion: q⁻¹ * v * q
 /// Quaternion format: [w, x, y, z] (scalar-first convention)
-/// Used to transform from world frame to body frame
+/// Used by BNO055 (body→world convention: apply inverse to get world→body)
 fn quat_rotate_vec_inverse(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
     let [w, qx, qy, qz] = quat;
     let [vx, vy, vz] = vec;
@@ -59,6 +59,28 @@ fn quat_rotate_vec_inverse(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
         vx - w * tx + cx,
         vy - w * ty + cy,
         vz - w * tz + cz,
+    ]
+}
+
+/// Rotate a vector directly by a quaternion: q * v * q⁻¹
+/// Quaternion format: [w, x, y, z] (scalar-first convention)
+/// Used by BNO08X (reference→body convention: apply directly to get world→body)
+fn quat_rotate_vec(quat: [f64; 4], vec: [f64; 3]) -> [f64; 3] {
+    let [w, qx, qy, qz] = quat;
+    let [vx, vy, vz] = vec;
+
+    let tx = (qy * vz - qz * vy) * 2.0;
+    let ty = (qz * vx - qx * vz) * 2.0;
+    let tz = (qx * vy - qy * vx) * 2.0;
+
+    let cx = qy * tz - qz * ty;
+    let cy = qz * tx - qx * tz;
+    let cz = qx * ty - qy * tx;
+
+    [
+        vx + w * tx + cx,
+        vy + w * ty + cy,
+        vz + w * tz + cz,
     ]
 }
 
@@ -572,6 +594,19 @@ fn bno08x_poll_thread(
                     }
                 }
 
+                // Sanity-check parsed values: discard obviously corrupt packets
+                if let Some(g) = gyro_update {
+                    if g[0].abs() > 50.0 || g[1].abs() > 50.0 || g[2].abs() > 50.0 {
+                        gyro_update = None;
+                    }
+                }
+                if let Some(q) = quat_update {
+                    let mag = (q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]).sqrt();
+                    if (mag - 1.0).abs() > 0.3 {
+                        quat_update = None;
+                    }
+                }
+
                 if gyro_update.is_some() || quat_update.is_some() {
                     let mut state = shared.lock().unwrap();
                     if let Some(g) = gyro_update { state.last_gyro = g; }
@@ -673,7 +708,7 @@ impl Bno08xController {
         self.gyro_history[1] = gyro_raw;
 
         let world_gravity = [0.0, 0.0, -1.0];
-        let grav_sensor = quat_rotate_vec_inverse(last_quat, world_gravity);
+        let grav_sensor = quat_rotate_vec(last_quat, world_gravity);
         let grav_robot = [grav_sensor[0], grav_sensor[1], grav_sensor[2]];
         let accel_final = finalize_gravity(grav_robot, self.gravity_offset);
 
