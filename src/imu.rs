@@ -661,8 +661,8 @@ impl Bno08xController {
         let last_quat = state.last_quat;
         drop(state);
 
-        // Apply axis remap: Robot = [-Sensor_X, -Sensor_Y, +Sensor_Z]
-        let gyro_raw = [-last_gyro[0], -last_gyro[1], last_gyro[2]];
+        // Sensor mounted with X+ forward, Y+ left, Z+ up — matches robot frame directly
+        let gyro_raw = [last_gyro[0], last_gyro[1], last_gyro[2]];
 
         let gyro_filtered = [
             median3(self.gyro_history[0][0], self.gyro_history[1][0], gyro_raw[0]),
@@ -674,7 +674,7 @@ impl Bno08xController {
 
         let world_gravity = [0.0, 0.0, -1.0];
         let grav_sensor = quat_rotate_vec_inverse(last_quat, world_gravity);
-        let grav_robot = [-grav_sensor[0], -grav_sensor[1], grav_sensor[2]];
+        let grav_robot = [grav_sensor[0], grav_sensor[1], grav_sensor[2]];
         let accel_final = finalize_gravity(grav_robot, self.gravity_offset);
 
         let accel_filtered = [
