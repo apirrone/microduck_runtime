@@ -48,7 +48,7 @@ struct Args {
     model: Option<String>,
 
     /// Path to standing policy ONNX model file (optional)
-    #[arg(short, long, default_value = "~/microduck/policies/standing_body_control.onnx")]
+    #[arg(short, long, default_value = "~/microduck/policies/standing.onnx")]
     standing: Option<String>,
 
     /// Position P gain for motors
