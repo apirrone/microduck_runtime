@@ -143,6 +143,10 @@ struct Args {
     #[arg(long, default_value_t = 400)]
     mouth_kp: u16,
 
+    /// Roller mode: always use the walking/roller policy, never switch to standing policy
+    #[arg(long)]
+    roller: bool,
+
     /// Path to ground pick policy ONNX model file (enables A button one-shot ground pick)
     #[arg(long, default_value = "~/microduck/policies/ground_pick.onnx")]
     ground_pick: Option<String>,
@@ -206,6 +210,7 @@ struct Runtime {
     prev_action_scale: f64,
     a_button_prev_state: bool,
     // Standing policy
+    roller_mode: bool,
     has_standing_policy: bool,
     is_using_standing: bool,
     standing_prev_action_scale: f64,
@@ -377,6 +382,7 @@ impl Runtime {
             ground_pick_kp_ratio: args.ground_pick_kp_ratio,
             prev_action_scale: args.action_scale,
             a_button_prev_state: false,
+            roller_mode: args.roller,
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
             standing_prev_action_scale: args.action_scale,
@@ -631,7 +637,7 @@ impl Runtime {
         };
 
         // Standing policy transitions: apply action_scale=1 and kp=60% when switching to standing
-        if !self.ground_pick_active {
+        if !self.ground_pick_active && !self.roller_mode {
             let will_stand = self.policy.will_use_standing(effective_command);
             if will_stand && !self.is_using_standing {
                 self.is_using_standing = true;
