@@ -275,6 +275,12 @@ impl Runtime {
             Policy::new_dummy().context("Failed to create dummy policy")?
         };
 
+        // In roller mode, disable standing policy switching
+        if args.roller {
+            policy.set_standing_disabled(true);
+            println!("✓ Roller mode: standing policy switching disabled");
+        }
+
         // Load ground pick model if specified
         if let Some(ref gp_path) = args.ground_pick {
             println!("✓ Loading ground pick ONNX model from: {}", gp_path);
@@ -510,6 +516,14 @@ impl Runtime {
                 self.body_cmd[1] += self.cmd_alpha * (target_pitch  - self.body_cmd[1]);
                 self.body_cmd[2] += self.cmd_alpha * (target_roll   - self.body_cmd[2]);
                 self.command = [0.0; 3]; // keep command near zero to stay in standing mode
+            } else if self.roller_mode {
+                // Roller mode: asymmetric vel_x (0.6 push / -0.5 brake), no lateral, ±1.0 rad heading
+                let vel_x_raw = left_x as f64;
+                let vel_x = if vel_x_raw >= 0.0 { vel_x_raw * 0.6 } else { vel_x_raw * 0.5 };
+                let target_cmd = [vel_x, 0.0, -right_y as f64 * 1.0];
+                for i in 0..3 {
+                    self.command[i] += self.cmd_alpha * (target_cmd[i] - self.command[i]);
+                }
             } else {
                 // Normal mode: joysticks control velocity commands
                 // - Left stick X (up/down) → vel_x forward/backward

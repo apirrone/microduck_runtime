@@ -21,6 +21,7 @@ pub struct Policy {
     ground_pick_active: bool,
     start_time: Instant,
     command_threshold: f64,
+    standing_disabled: bool,
 }
 
 impl Policy {
@@ -33,6 +34,7 @@ impl Policy {
             ground_pick_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
+            standing_disabled: false,
         })
     }
 
@@ -53,6 +55,7 @@ impl Policy {
             ground_pick_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
+            standing_disabled: false,
         })
     }
 
@@ -79,6 +82,7 @@ impl Policy {
             ground_pick_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
+            standing_disabled: false,
         })
     }
 
@@ -107,9 +111,14 @@ impl Policy {
         (command[0].powi(2) + command[1].powi(2) + command[2].powi(2)).sqrt()
     }
 
+    /// Disable standing policy switching (e.g. roller mode)
+    pub fn set_standing_disabled(&mut self, disabled: bool) {
+        self.standing_disabled = disabled;
+    }
+
     /// Returns true if the standing policy would be selected for the given command
     pub fn will_use_standing(&self, command: &[f64; 3]) -> bool {
-        self.standing_mode.is_some() && Self::command_magnitude(command) <= self.command_threshold
+        !self.standing_disabled && self.standing_mode.is_some() && Self::command_magnitude(command) <= self.command_threshold
     }
 
     /// Run inference on an observation to get actions
@@ -129,7 +138,7 @@ impl Policy {
         }
 
         // Determine which policy to use based on command magnitude
-        let use_standing = if self.standing_mode.is_some() {
+        let use_standing = if self.standing_mode.is_some() && !self.standing_disabled {
             Self::command_magnitude(command) <= self.command_threshold
         } else {
             false
