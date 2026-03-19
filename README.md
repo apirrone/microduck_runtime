@@ -1,8 +1,7 @@
 # Microduck Runtime
 
-Runtime for the Microduck robot. Runs on Raspberry Pi Zero 2W with 14 Dynamixel XL330 motors and a BNO055 IMU.
+Runtime for the Microduck robot. Runs on Raspberry Pi Zero 2W with 15 Dynamixel XL330 motors and a BNO055 IMU.
 
-Main repo : https://github.com/apirrone/microduck
 
 ## Install command
 
