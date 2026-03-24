@@ -347,10 +347,14 @@ impl Runtime {
         println!("Initializing Xbox controller...");
         let mut controller = Controller::new()
             .context("Failed to initialize controller")?;
-        controller.wait_for_connection()
-            .context("Failed to connect to controller")?;
-        if let Some(name) = controller.get_controller_name() {
-            println!("✓ Controller connected: {}", name);
+        if args.battery_benchmark.is_none() {
+            controller.wait_for_connection()
+                .context("Failed to connect to controller")?;
+            if let Some(name) = controller.get_controller_name() {
+                println!("✓ Controller connected: {}", name);
+            }
+        } else {
+            println!("⚡ Battery benchmark: skipping controller connection");
         }
         println!("  Max linear velocity: {:.2} m/s", args.max_linear_vel);
         println!("  Max angular velocity: {:.2} rad/s", args.max_angular_vel);
@@ -497,7 +501,7 @@ impl Runtime {
                 if self.benchmark_recovering {
                     self.command = [0.0, 0.0, 0.0];
                 } else {
-                    const BENCHMARK_VEL: f64 = 0.1;
+                    const BENCHMARK_VEL: f64 = 0.3;
                     const STEPS_PER_PHASE: u64 = 150; // 3 s at 50 Hz
                     let phase = (self.benchmark_step / STEPS_PER_PHASE) % 2;
                     let vel_x = if phase == 0 { BENCHMARK_VEL } else { -BENCHMARK_VEL };
@@ -1138,22 +1142,28 @@ async fn main() -> Result<()> {
     })
     .context("Failed to set Ctrl+C handler")?;
 
-    // Step 1: wait for first Start press → initialize motors
-    println!("\n⏳ Press Start to initialize motors...");
-    runtime.wait_for_start_button(true).await?;
-    runtime.initialize_motors()?;
+    if args.battery_benchmark.is_some() {
+        // Battery benchmark: no controller needed, initialize and go immediately
+        println!("\n⚡ Battery benchmark: initializing motors and starting immediately...");
+        runtime.initialize_motors()?;
+    } else {
+        // Step 1: wait for first Start press → initialize motors
+        println!("\n⏳ Press Start to initialize motors...");
+        runtime.wait_for_start_button(true).await?;
+        runtime.initialize_motors()?;
 
-    // If recording mode is enabled, wait 1 second before starting the control loop
-    // This gives the robot time to settle, then we'll record 1 second of standby
-    if args.record.is_some() {
-        println!("Recording mode: waiting 1 second before starting control loop...");
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        println!("✓ Starting control loop (1s standby recording, then policy inference)");
+        // If recording mode is enabled, wait 1 second before starting the control loop
+        // This gives the robot time to settle, then we'll record 1 second of standby
+        if args.record.is_some() {
+            println!("Recording mode: waiting 1 second before starting control loop...");
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            println!("✓ Starting control loop (1s standby recording, then policy inference)");
+        }
+
+        // Step 2: wait for second Start press → run the policy
+        println!("\n⏳ Press Start to run the policy...");
+        runtime.wait_for_start_button(false).await?;
     }
-
-    // Step 2: wait for second Start press → run the policy
-    println!("\n⏳ Press Start to run the policy...");
-    runtime.wait_for_start_button(false).await?;
 
     // Run main loop (will exit when Ctrl+C is pressed)
     runtime.run(shutdown_flag).await?;
