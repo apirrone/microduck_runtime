@@ -61,11 +61,13 @@ pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [
 /// Conversion factor for velocity: 0.229 RPM per count * (2π / 60) for rad/s
 const RADS_PER_SEC_PER_COUNT: f64 = 0.229 * (2.0 * PI / 60.0);
 
-/// Motor state containing position and velocity
+/// Motor state containing position, velocity and current
 #[derive(Debug, Clone)]
 pub struct MotorState {
     pub positions: [f64; NUM_MOTORS],
     pub velocities: [f64; NUM_MOTORS],
+    /// Absolute present current for each motor in mA
+    pub currents_ma: [f64; NUM_MOTORS],
 }
 
 impl Default for MotorState {
@@ -73,6 +75,7 @@ impl Default for MotorState {
         Self {
             positions: [0.0; NUM_MOTORS],
             velocities: [0.0; NUM_MOTORS],
+            currents_ma: [0.0; NUM_MOTORS],
         }
     }
 }
@@ -112,19 +115,20 @@ impl MotorController {
     }
 
     /// Read current state using single bulk sync_read (faster)
-    /// Uses a single optimized sync_read for both velocity and position
+    /// Reads 10 consecutive bytes starting at address 126:
+    ///   bytes 0-1: present current  (i16, mA)
+    ///   bytes 2-5: present velocity (i32)
+    ///   bytes 6-9: present position (i32)
     fn read_state_bulk(&mut self) -> Result<MotorState> {
         let mut state = MotorState::default();
 
-        // Optimized: Single sync read for both velocity (addr 128, 4 bytes) and position (addr 132, 4 bytes)
-        // This reads 8 consecutive bytes starting at address 128
-        const VELOCITY_ADDR: u8 = 128;
-        const READ_LENGTH: u8 = 8;  // 4 bytes velocity + 4 bytes position
+        const CURRENT_ADDR: u8 = 126;
+        const READ_LENGTH: u8 = 10; // 2 bytes current + 4 bytes velocity + 4 bytes position
 
         let raw_data = self.controller
-            .sync_read_raw_data(&MOTOR_IDS, VELOCITY_ADDR, READ_LENGTH)
+            .sync_read_raw_data(&MOTOR_IDS, CURRENT_ADDR, READ_LENGTH)
             .map_err(|e| anyhow::anyhow!("Failed to bulk read motor state (addr {}, len {}): {}",
-                VELOCITY_ADDR, READ_LENGTH, e))?;
+                CURRENT_ADDR, READ_LENGTH, e))?;
 
         // Validate we got data for all motors
         if raw_data.len() != MOTOR_IDS.len() {
@@ -132,22 +136,26 @@ impl MotorController {
                 MOTOR_IDS.len(), raw_data.len()));
         }
 
-        // Parse the 8-byte response for each motor
+        // Parse the 10-byte response for each motor
         for (i, motor_data) in raw_data.iter().enumerate() {
-            if motor_data.len() != 8 {
-                return Err(anyhow::anyhow!("Invalid data length for motor {} (ID {}): expected 8 bytes, got {}",
+            if motor_data.len() != 10 {
+                return Err(anyhow::anyhow!("Invalid data length for motor {} (ID {}): expected 10 bytes, got {}",
                     i, MOTOR_IDS[i], motor_data.len()));
             }
 
-            // Extract velocity (first 4 bytes) as i32
+            // Extract current (first 2 bytes) as i16, convert to absolute mA
+            let raw_current = i16::from_le_bytes([motor_data[0], motor_data[1]]);
+            state.currents_ma[i] = (raw_current as f64).abs();
+
+            // Extract velocity (next 4 bytes) as i32
             let raw_velocity = i32::from_le_bytes([
-                motor_data[0], motor_data[1], motor_data[2], motor_data[3]
+                motor_data[2], motor_data[3], motor_data[4], motor_data[5]
             ]);
             state.velocities[i] = convert_velocity(raw_velocity as f64);
 
             // Extract position (last 4 bytes) as i32 and convert to radians
             let raw_position = i32::from_le_bytes([
-                motor_data[4], motor_data[5], motor_data[6], motor_data[7]
+                motor_data[6], motor_data[7], motor_data[8], motor_data[9]
             ]);
             state.positions[i] = (2.0 * PI * (raw_position as f64) / 4096.0) - PI;
         }
@@ -156,7 +164,7 @@ impl MotorController {
     }
 
     /// Read current state using separate sync_reads (slower but more reliable)
-    /// Uses two separate sync_read operations
+    /// Uses three separate sync_read operations
     fn read_state_separate(&mut self) -> Result<MotorState> {
         let mut state = MotorState::default();
 
@@ -172,6 +180,14 @@ impl MotorController {
             .map_err(|e| anyhow::anyhow!("Failed to read velocities: {}", e))?;
         for (i, &raw_vel) in raw_velocities.iter().enumerate() {
             state.velocities[i] = convert_velocity(raw_vel as f64);
+        }
+
+        // Sync read present current (in mA, absolute value)
+        let raw_currents = self.controller
+            .sync_read_present_current(&MOTOR_IDS)
+            .map_err(|e| anyhow::anyhow!("Failed to read currents: {}", e))?;
+        for (i, &c) in raw_currents.iter().enumerate() {
+            state.currents_ma[i] = (c as f64).abs();
         }
 
         Ok(state)

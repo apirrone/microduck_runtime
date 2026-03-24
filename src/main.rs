@@ -214,9 +214,10 @@ struct Runtime {
     ground_pick_kp_ratio: f64,
     prev_action_scale: f64,
     a_button_prev_state: bool,
-    // Current estimation
+    // Current estimation (running stats, updated every control step)
     estimate_current: bool,
-    current_samples: Vec<f64>,
+    current_sum: f64,
+    current_count: u64,
     current_peak: f64,
     // Standing policy
     roller_mode: bool,
@@ -398,7 +399,8 @@ impl Runtime {
             prev_action_scale: args.action_scale,
             a_button_prev_state: false,
             estimate_current: args.estimate_current,
-            current_samples: Vec::new(),
+            current_sum: 0.0,
+            current_count: 0,
             current_peak: 0.0,
             roller_mode: args.roller,
             has_standing_policy: args.standing.is_some(),
@@ -641,6 +643,16 @@ impl Runtime {
         let motor_state = self.motor_controller.read_state()
             .context("Failed to read motor state")?;
 
+        // Current estimation: accumulate running stats at every control step
+        if self.estimate_current {
+            let total: f64 = motor_state.currents_ma.iter().sum();
+            self.current_sum += total;
+            self.current_count += 1;
+            if total > self.current_peak {
+                self.current_peak = total;
+            }
+        }
+
         // Ground pick: override command with phase encoding [cos, sin, 0] and use 51D obs
         // Body pose mode: put normalized body_cmd into command slot (51D obs, matching standing policy training)
         let gp_cmd;
@@ -861,19 +873,12 @@ impl Runtime {
                     0.0
                 };
 
-                // Read leg currents
+                // Read leg currents (for display only)
                 let currents_result = self.motor_controller.read_leg_currents();
                 let current_str = match currents_result {
-                    Ok((left, right, total)) => {
-                        if self.estimate_current {
-                            self.current_samples.push(total);
-                            if total > self.current_peak {
-                                self.current_peak = total;
-                            }
-                        }
-                        format!("Left: {:.0} mA, Right: {:.0} mA, Total: {:.0} mA",
-                                left, right, left + right)
-                    },
+                    Ok((left, right, _total)) => format!(
+                        "Left: {:.0} mA, Right: {:.0} mA, Total: {:.0} mA",
+                        left, right, left + right),
                     Err(_) => "Current read failed".to_string(),
                 };
 
@@ -991,9 +996,9 @@ impl Runtime {
         }
 
         // Print current estimation results if enabled
-        if self.estimate_current && !self.current_samples.is_empty() {
-            let mean = self.current_samples.iter().sum::<f64>() / self.current_samples.len() as f64;
-            println!("\n=== Current Estimation ({} samples) ===", self.current_samples.len());
+        if self.estimate_current && self.current_count > 0 {
+            let mean = self.current_sum / self.current_count as f64;
+            println!("\n=== Current Estimation ({} samples at control freq) ===", self.current_count);
             println!("  Mean total current : {:.0} mA", mean);
             println!("  Peak total current : {:.0} mA", self.current_peak);
             println!("  (All 14 body motors cumulated)");
