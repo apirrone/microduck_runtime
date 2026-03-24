@@ -195,9 +195,10 @@ impl MotorController {
         Ok(())
     }
 
-    /// Read current from all motors and return total current for legs (in mA)
-    /// Returns (left_leg_current_mA, right_leg_current_mA)
-    pub fn read_leg_currents(&mut self) -> Result<(f64, f64)> {
+    /// Read current from all motors.
+    /// Returns (left_leg_mA, right_leg_mA, total_all_motors_mA).
+    /// left/right only sum leg motors (indices 0-4 and 9-13); total sums all 14.
+    pub fn read_leg_currents(&mut self) -> Result<(f64, f64, f64)> {
         // Sync read present current (in mA)
         let currents = self.controller
             .sync_read_present_current(&MOTOR_IDS)
@@ -209,7 +210,10 @@ impl MotorController {
         // Sum right leg currents (indices 9-13: IDs 10-14)
         let right_leg_current: f64 = currents[9..14].iter().map(|&c| (c as f64).abs()).sum();
 
-        Ok((left_leg_current, right_leg_current))
+        // Sum all 14 body motors
+        let total_current: f64 = currents.iter().map(|&c| (c as f64).abs()).sum();
+
+        Ok((left_leg_current, right_leg_current, total_current))
     }
 
     /// Read present input voltage for all motors (in Volts)

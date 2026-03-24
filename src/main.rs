@@ -143,6 +143,11 @@ struct Args {
     #[arg(long, default_value_t = 400)]
     mouth_kp: u16,
 
+    /// Estimate mean and peak current draw across all 14 body motors during the session.
+    /// Samples are collected once per second and the results are printed at shutdown.
+    #[arg(long)]
+    estimate_current: bool,
+
     /// Roller mode: always use the walking/roller policy, never switch to standing policy
     #[arg(long)]
     roller: bool,
@@ -209,6 +214,10 @@ struct Runtime {
     ground_pick_kp_ratio: f64,
     prev_action_scale: f64,
     a_button_prev_state: bool,
+    // Current estimation
+    estimate_current: bool,
+    current_samples: Vec<f64>,
+    current_peak: f64,
     // Standing policy
     roller_mode: bool,
     has_standing_policy: bool,
@@ -388,6 +397,9 @@ impl Runtime {
             ground_pick_kp_ratio: args.ground_pick_kp_ratio,
             prev_action_scale: args.action_scale,
             a_button_prev_state: false,
+            estimate_current: args.estimate_current,
+            current_samples: Vec::new(),
+            current_peak: 0.0,
             roller_mode: args.roller,
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
@@ -852,8 +864,16 @@ impl Runtime {
                 // Read leg currents
                 let currents_result = self.motor_controller.read_leg_currents();
                 let current_str = match currents_result {
-                    Ok((left, right)) => format!("Left: {:.0} mA, Right: {:.0} mA, Total: {:.0} mA",
-                                                left, right, left + right),
+                    Ok((left, right, total)) => {
+                        if self.estimate_current {
+                            self.current_samples.push(total);
+                            if total > self.current_peak {
+                                self.current_peak = total;
+                            }
+                        }
+                        format!("Left: {:.0} mA, Right: {:.0} mA, Total: {:.0} mA",
+                                left, right, left + right)
+                    },
                     Err(_) => "Current read failed".to_string(),
                 };
 
@@ -968,6 +988,15 @@ impl Runtime {
         if let Some(ref mut file) = self.log_file {
             file.flush()?;
             println!("✓ Log file flushed and closed");
+        }
+
+        // Print current estimation results if enabled
+        if self.estimate_current && !self.current_samples.is_empty() {
+            let mean = self.current_samples.iter().sum::<f64>() / self.current_samples.len() as f64;
+            println!("\n=== Current Estimation ({} samples) ===", self.current_samples.len());
+            println!("  Mean total current : {:.0} mA", mean);
+            println!("  Peak total current : {:.0} mA", self.current_peak);
+            println!("  (All 14 body motors cumulated)");
         }
 
         // Note: We do NOT disable motor torque on shutdown
