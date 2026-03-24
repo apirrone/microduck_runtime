@@ -993,7 +993,10 @@ impl Runtime {
                     file.flush().ok();
                 }
 
-                // Battery benchmark: write timing log every second
+                // Battery benchmark: print elapsed and write timing log every second
+                if self.battery_benchmark {
+                    println!("🔋 Benchmark elapsed: {:.0}s", total_elapsed);
+                }
                 if let Some(ref mut file) = self.benchmark_log {
                     let current_unix = SystemTime::now()
                         .duration_since(UNIX_EPOCH)
