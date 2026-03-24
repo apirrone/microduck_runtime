@@ -14,7 +14,7 @@ use controller::Controller;
 use serde::Serialize;
 use std::fs::File;
 use std::io::Write as IoWrite;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Timestamped observation for recording
 #[derive(Serialize, Debug, Clone)]
@@ -152,6 +152,12 @@ struct Args {
     #[arg(long)]
     roller: bool,
 
+    /// Battery benchmark mode: robot walks on the spot until battery dies.
+    /// Ignores controller input, alternates tiny ±vel_x, auto-recovers from falls.
+    /// Logs start time, elapsed time and current time every second to the given file.
+    #[arg(long)]
+    battery_benchmark: Option<String>,
+
     /// Path to ground pick policy ONNX model file (enables A button one-shot ground pick)
     #[arg(long, default_value = "~/microduck/policies/ground_pick.onnx")]
     ground_pick: Option<String>,
@@ -226,6 +232,12 @@ struct Runtime {
     standing_prev_action_scale: f64,
     // Emergency stop
     select_held_since: Option<Instant>,
+    // Battery benchmark
+    battery_benchmark: bool,
+    benchmark_log: Option<File>,
+    benchmark_recovering: bool,
+    benchmark_step: u64,
+    benchmark_start_unix: f64,
 }
 
 impl Runtime {
@@ -290,6 +302,18 @@ impl Runtime {
             policy.set_standing_disabled(true);
             println!("✓ Roller mode: standing policy switching disabled");
         }
+
+        // Battery benchmark: standing policy is kept active so it can handle fall recovery
+        let benchmark_log = if let Some(ref path) = args.battery_benchmark {
+            let mut file = File::create(path)
+                .context(format!("Failed to create benchmark log file: {}", path))?;
+            writeln!(file, "start_time_unix,elapsed_seconds,current_time_unix")?;
+            println!("✓ Battery benchmark mode enabled: log -> {}", path);
+            println!("  Controller ignored. Alternates ±0.1 m/s. Auto-recovers from falls via standing policy.");
+            Some(file)
+        } else {
+            None
+        };
 
         // Load ground pick model if specified
         if let Some(ref gp_path) = args.ground_pick {
@@ -407,6 +431,11 @@ impl Runtime {
             is_using_standing: false,
             standing_prev_action_scale: args.action_scale,
             select_held_since: None,
+            battery_benchmark: args.battery_benchmark.is_some(),
+            benchmark_log,
+            benchmark_recovering: false,
+            benchmark_step: 0,
+            benchmark_start_unix: 0.0,
         })
     }
 
@@ -450,6 +479,32 @@ impl Runtime {
         {
             self.controller.update()
                 .context("Failed to update controller")?;
+
+            if self.battery_benchmark {
+                // Benchmark mode: only process emergency stop; ignore all stick/button input
+                let select_pressed = self.controller.is_button_pressed("Select");
+                if select_pressed {
+                    let held_since = self.select_held_since.get_or_insert_with(Instant::now);
+                    if held_since.elapsed() >= Duration::from_secs(2) {
+                        println!("🛑 Emergency stop! Disabling motors and exiting (systemd will restart)...");
+                        self.motor_controller.set_torque_enable(false).ok();
+                        std::process::exit(1);
+                    }
+                } else {
+                    self.select_held_since = None;
+                }
+                // Set command: [0,0,0] while recovering, else alternate ±0.1 m/s every 3 s
+                if self.benchmark_recovering {
+                    self.command = [0.0, 0.0, 0.0];
+                } else {
+                    const BENCHMARK_VEL: f64 = 0.1;
+                    const STEPS_PER_PHASE: u64 = 150; // 3 s at 50 Hz
+                    let phase = (self.benchmark_step / STEPS_PER_PHASE) % 2;
+                    let vel_x = if phase == 0 { BENCHMARK_VEL } else { -BENCHMARK_VEL };
+                    self.command = [vel_x, 0.0, 0.0];
+                    self.benchmark_step += 1;
+                }
+            } else {
 
             let state = self.controller.get_state();
 
@@ -593,6 +648,7 @@ impl Runtime {
             } else {
                 self.select_held_since = None;
             }
+            } // end else (non-benchmark controller processing)
         }
 
         // Read IMU data
@@ -622,8 +678,27 @@ impl Runtime {
         // Fall detection: accel is projected gravity from quaternion (no walking dynamics).
         // When upright accel[2] ≈ -1.0; above -0.5 means >60° tilt.
         // Debounce: only trigger after 0.2s of continuous detection.
-        // Skipped when a standing policy is provided (it handles standup autonomously).
-        if !self.has_standing_policy && !self.fallen {
+        if self.battery_benchmark {
+            // Benchmark fall detection: auto-recover via standing policy (command → 0)
+            if self.benchmark_recovering {
+                if imu_data.accel[2] < -0.5 {
+                    // Robot is upright again: resume benchmark walking
+                    self.benchmark_recovering = false;
+                    self.fall_detected_since = None;
+                    println!("▶ Benchmark: upright, resuming walk");
+                }
+            } else if imu_data.accel[2] > -0.5 {
+                let since = self.fall_detected_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_millis(200) {
+                    self.benchmark_recovering = true;
+                    self.fall_detected_since = None;
+                    println!("⚠ FALLEN (benchmark)! Switching to standing policy for recovery...");
+                }
+            } else {
+                self.fall_detected_since = None;
+            }
+        } else if !self.has_standing_policy && !self.fallen {
+            // Standard fall detection: skipped when a standing policy is provided.
             if imu_data.accel[2] > -0.5 {
                 let since = self.fall_detected_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= Duration::from_millis(200) {
@@ -807,6 +882,15 @@ impl Runtime {
         self.start_time = Some(Instant::now());
         let runtime_start = Instant::now();
 
+        if self.battery_benchmark {
+            self.policy_enabled = true;
+            self.benchmark_start_unix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            println!("✓ Battery benchmark started: policy auto-enabled");
+        }
+
         // In recording mode, schedule policy to enable after 1 second standby
         let policy_enable_time = if !self.policy_enabled && self.record_file.is_some() {
             Some(Instant::now() + Duration::from_secs(1))
@@ -906,6 +990,17 @@ impl Runtime {
 
                 // Flush log file every second
                 if let Some(ref mut file) = self.log_file {
+                    file.flush().ok();
+                }
+
+                // Battery benchmark: write timing log every second
+                if let Some(ref mut file) = self.benchmark_log {
+                    let current_unix = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs_f64();
+                    let elapsed = current_unix - self.benchmark_start_unix;
+                    writeln!(file, "{:.3},{:.3},{:.3}", self.benchmark_start_unix, elapsed, current_unix).ok();
                     file.flush().ok();
                 }
             }
