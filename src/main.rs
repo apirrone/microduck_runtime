@@ -161,10 +161,14 @@ struct Args {
     roller: bool,
 
     /// Battery benchmark mode: robot walks on the spot until battery dies.
-    /// Ignores controller input, alternates tiny ±vel_x, auto-recovers from falls.
+    /// Ignores controller input, auto-recovers from falls.
     /// Logs start time, elapsed time and current time every second to the given file.
     #[arg(long)]
     battery_benchmark: Option<String>,
+
+    /// Forward velocity (m/s) used in battery benchmark mode.
+    #[arg(long, default_value_t = 0.3)]
+    benchmark_vel: f64,
 
     /// Path to ground pick policy ONNX model file (enables A button one-shot ground pick)
     #[arg(long, default_value = "~/microduck/policies/ground_pick.onnx")]
@@ -243,6 +247,7 @@ struct Runtime {
     select_held_since: Option<Instant>,
     // Battery benchmark
     battery_benchmark: bool,
+    benchmark_vel: f64,
     benchmark_log: Option<File>,
     benchmark_recovering: bool,
     benchmark_start_unix: f64,
@@ -450,6 +455,7 @@ impl Runtime {
             standing_prev_action_scale: args.action_scale,
             select_held_since: None,
             battery_benchmark: args.battery_benchmark.is_some(),
+            benchmark_vel: args.benchmark_vel,
             benchmark_log,
             benchmark_recovering: false,
             benchmark_start_unix: 0.0,
@@ -510,8 +516,8 @@ impl Runtime {
                 } else {
                     self.select_held_since = None;
                 }
-                // Set command: always forward at 0.3 m/s
-                self.command = [0.3, 0.0, 0.0];
+                // Set command: always forward at configured velocity
+                self.command = [self.benchmark_vel, 0.0, 0.0];
             } else {
 
             let state = self.controller.get_state();
