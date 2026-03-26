@@ -127,6 +127,14 @@ struct Args {
     #[arg(long, default_value_t = 0.1)]
     controller_deadzone: f32,
 
+    /// Default neck pitch offset in radians (added on top of policy output at startup)
+    #[arg(long, default_value_t = -0.5, allow_hyphen_values = true)]
+    neck_pitch_default: f64,
+
+    /// Default head pitch offset in radians (added on top of policy output at startup)
+    #[arg(long, default_value_t = 0.5, allow_hyphen_values = true)]
+    head_pitch_default: f64,
+
     /// Maximum head/neck joint offset in head mode (radians)
     #[arg(long, default_value_t = 2.5)]
     head_max: f64,
@@ -406,7 +414,7 @@ impl Runtime {
             controller_deadzone: args.controller_deadzone,
             start_button_prev_state: false,
             head_mode: false,
-            head_offsets: [0.0; 4],
+            head_offsets: [args.neck_pitch_default, args.head_pitch_default, 0.0, 0.0],
             head_max: args.head_max,
             head_alpha: args.head_alpha,
             cmd_alpha: args.cmd_alpha,
