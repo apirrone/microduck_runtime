@@ -510,8 +510,8 @@ impl Runtime {
                 } else {
                     self.select_held_since = None;
                 }
-                // Set command: always zero
-                self.command = [0.0, 0.0, 0.0];
+                // Set command: always forward at 0.3 m/s
+                self.command = [0.3, 0.0, 0.0];
             } else {
 
             let state = self.controller.get_state();
