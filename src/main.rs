@@ -208,6 +208,7 @@ struct Runtime {
     start_button_prev_state: bool,  // Track Start button state for edge detection
     head_mode: bool,  // Head control mode (Y button)
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
+    default_positions: [f64; NUM_MOTORS],  // per-run override of DEFAULT_POSITION
     head_max: f64,  // Max head offset in radians
     head_alpha: f64,  // EMA smoothing factor for head commands (0=still, 1=no smoothing)
     cmd_alpha: f64,   // EMA smoothing factor for velocity commands (0=still, 1=no smoothing)
@@ -414,7 +415,13 @@ impl Runtime {
             controller_deadzone: args.controller_deadzone,
             start_button_prev_state: false,
             head_mode: false,
-            head_offsets: [args.neck_pitch_default, args.head_pitch_default, 0.0, 0.0],
+            head_offsets: [0.0; 4],
+            default_positions: {
+                let mut p = DEFAULT_POSITION;
+                p[5] = args.neck_pitch_default;
+                p[6] = args.head_pitch_default;
+                p
+            },
             head_max: args.head_max,
             head_alpha: args.head_alpha,
             cmd_alpha: args.cmd_alpha,
@@ -802,7 +809,7 @@ impl Runtime {
         // Convert action offsets to motor targets: init_pos + action_scale * action
         let mut motor_targets = [0.0f64; NUM_MOTORS];
         for i in 0..NUM_MOTORS {
-            motor_targets[i] = DEFAULT_POSITION[i] + self.action_scale * action[i] as f64;
+            motor_targets[i] = self.default_positions[i] + self.action_scale * action[i] as f64;
         }
 
         // Apply head offsets to neck/head joints (motor indices 5-8: neck_pitch, head_pitch, head_yaw, head_roll)
