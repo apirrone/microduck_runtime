@@ -320,7 +320,7 @@ impl Runtime {
         let benchmark_log = if let Some(ref path) = args.battery_benchmark {
             let mut file = File::create(path)
                 .context(format!("Failed to create benchmark log file: {}", path))?;
-            writeln!(file, "start_time_unix,elapsed_seconds,current_time_unix")?;
+            writeln!(file, "start_time_unix,elapsed_seconds,current_time_unix,avg_voltage")?;
             println!("✓ Battery benchmark mode enabled: log -> {}", path);
             println!("  Controller ignored. Alternates ±0.1 m/s. Auto-recovers from falls via standing policy.");
             Some(file)
@@ -1009,16 +1009,19 @@ impl Runtime {
 
                 // Battery benchmark: print elapsed and write timing log every second
                 if self.battery_benchmark {
-                    println!("🔋 Benchmark elapsed: {:.0}s", total_elapsed);
-                }
-                if let Some(ref mut file) = self.benchmark_log {
-                    let current_unix = SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs_f64();
-                    let elapsed = current_unix - self.benchmark_start_unix;
-                    writeln!(file, "{:.3},{:.3},{:.3}", self.benchmark_start_unix, elapsed, current_unix).ok();
-                    file.flush().ok();
+                    let avg_voltage = self.motor_controller.read_voltages()
+                        .map(|v| v.iter().map(|&x| x as f64).sum::<f64>() / v.len() as f64)
+                        .unwrap_or(0.0);
+                    println!("🔋 Benchmark elapsed: {:.0}s  avg voltage: {:.2}V", total_elapsed, avg_voltage);
+                    if let Some(ref mut file) = self.benchmark_log {
+                        let current_unix = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs_f64();
+                        let elapsed = current_unix - self.benchmark_start_unix;
+                        writeln!(file, "{:.3},{:.3},{:.3},{:.3}", self.benchmark_start_unix, elapsed, current_unix, avg_voltage).ok();
+                        file.flush().ok();
+                    }
                 }
             }
 
