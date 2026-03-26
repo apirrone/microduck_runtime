@@ -245,7 +245,6 @@ struct Runtime {
     battery_benchmark: bool,
     benchmark_log: Option<File>,
     benchmark_recovering: bool,
-    benchmark_step: u64,
     benchmark_start_unix: f64,
 }
 
@@ -453,7 +452,6 @@ impl Runtime {
             battery_benchmark: args.battery_benchmark.is_some(),
             benchmark_log,
             benchmark_recovering: false,
-            benchmark_step: 0,
             benchmark_start_unix: 0.0,
         })
     }
@@ -512,17 +510,8 @@ impl Runtime {
                 } else {
                     self.select_held_since = None;
                 }
-                // Set command: [0,0,0] while recovering, else alternate ±0.1 m/s every 3 s
-                if self.benchmark_recovering {
-                    self.command = [0.0, 0.0, 0.0];
-                } else {
-                    const BENCHMARK_VEL: f64 = 0.3;
-                    const STEPS_PER_PHASE: u64 = 150; // 3 s at 50 Hz
-                    let phase = (self.benchmark_step / STEPS_PER_PHASE) % 2;
-                    let vel_x = if phase == 0 { BENCHMARK_VEL } else { -BENCHMARK_VEL };
-                    self.command = [vel_x, 0.0, 0.0];
-                    self.benchmark_step += 1;
-                }
+                // Set command: always zero
+                self.command = [0.0, 0.0, 0.0];
             } else {
 
             let state = self.controller.get_state();
