@@ -23,6 +23,22 @@ struct TimestampedObservation {
     observation: Vec<f32>,
 }
 
+/// Metadata captured once at the start of a recording session
+#[derive(Serialize, Debug, Clone)]
+struct RecordingMetadata {
+    action_scale: f64,
+    voltage_v: f64,    // average motor voltage at recording start
+    freq_hz: u32,
+    unix_time: f64,    // wall-clock seconds since UNIX epoch
+}
+
+/// Top-level structure serialised to the .pkl file
+#[derive(Serialize, Debug, Clone)]
+struct RecordingData {
+    metadata: RecordingMetadata,
+    observations: Vec<TimestampedObservation>,
+}
+
 /// Microduck Robot Runtime
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -205,6 +221,7 @@ struct Runtime {
     step_counter: u64,
     record_file: Option<String>,
     recorded_observations: Vec<TimestampedObservation>,
+    record_voltage: f64,   // voltage read at recording start (0.0 if not recording)
     policy_enabled: bool,  // Controls whether policy inference runs
     max_linear_vel: f64,
     max_angular_vel: f64,
@@ -413,6 +430,7 @@ impl Runtime {
             step_counter: 0,
             record_file: args.record.clone(),
             recorded_observations: Vec::new(),
+            record_voltage: 0.0,
             policy_enabled,
             max_linear_vel: args.max_linear_vel,
             max_angular_vel: args.max_angular_vel,
@@ -493,6 +511,22 @@ impl Runtime {
             .context("Failed to interpolate to default position")?;
 
         println!("✓ Motors initialized and moved to default position");
+
+        // If recording, capture voltage now (motors settled, representative reading)
+        if self.record_file.is_some() {
+            match self.motor_controller.read_voltages() {
+                Ok(voltages) => {
+                    let avg = voltages.iter().map(|&v| v as f64).sum::<f64>() / voltages.len() as f64;
+                    self.record_voltage = avg;
+                    println!("✓ Recording metadata: action_scale={:.3}, voltage={:.2}V",
+                             self.action_scale, avg);
+                }
+                Err(e) => {
+                    println!("⚠ Could not read voltage for recording metadata: {}", e);
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -1095,13 +1129,29 @@ impl Runtime {
             println!("Saving {} recorded observations to {}...",
                      self.recorded_observations.len(), path);
 
+            let unix_time = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0);
+
+            let recording = RecordingData {
+                metadata: RecordingMetadata {
+                    action_scale: self.action_scale,
+                    voltage_v:    self.record_voltage,
+                    freq_hz:      self.control_freq,
+                    unix_time,
+                },
+                observations: self.recorded_observations.clone(),
+            };
+
             let mut file = File::create(path)
                 .context(format!("Failed to create recording file: {}", path))?;
 
-            serde_pickle::to_writer(&mut file, &self.recorded_observations, Default::default())
+            serde_pickle::to_writer(&mut file, &recording, Default::default())
                 .context("Failed to serialize observations to pickle format")?;
 
-            println!("✓ Recorded observations saved to {}", path);
+            println!("✓ Recorded observations saved to {} (action_scale={:.3}, voltage={:.2}V)",
+                     path, self.action_scale, self.record_voltage);
         }
 
         // Flush and close log file if it exists
