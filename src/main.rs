@@ -1137,7 +1137,11 @@ async fn main() -> Result<()> {
 
     // Expand ~ in path arguments (clap default_value doesn't get shell expansion)
     let home = std::env::var("HOME").unwrap_or_default();
-    let expand = |p: Option<String>| p.map(|s| if s.starts_with("~/") { format!("{}/{}", home, &s[2..]) } else { s });
+    let expand = |p: Option<String>| p.and_then(|s| {
+        if s.eq_ignore_ascii_case("none") { None }
+        else if s.starts_with("~/") { Some(format!("{}/{}", home, &s[2..])) }
+        else { Some(s) }
+    });
     args.model = expand(args.model);
     args.standing = expand(args.standing);
     args.ground_pick = expand(args.ground_pick);
