@@ -127,6 +127,17 @@ struct Args {
     #[arg(long, default_value_t = 0.6, allow_hyphen_values = true)]
     action_scale: f64,
 
+    /// Adapt action scale proportionally to battery voltage.
+    /// Effective scale = action_scale × (nominal_voltage / measured_voltage).
+    /// Compensates for kP varying linearly with supply voltage (BAM: kP ∝ V).
+    #[arg(long)]
+    voltage_adapt: bool,
+
+    /// Reference (nominal) voltage used during BAM motor identification, in volts.
+    /// Only used when --voltage-adapt is set.
+    #[arg(long, default_value_t = 7.4)]
+    nominal_voltage: f64,
+
     /// Enable recording mode: save observations to pickle file on Ctrl+C
     #[arg(short, long)]
     record: Option<String>,
@@ -222,6 +233,9 @@ struct Runtime {
     record_file: Option<String>,
     recorded_observations: Vec<TimestampedObservation>,
     record_voltage: f64,   // voltage read at recording start (0.0 if not recording)
+    voltage_ema: f64,      // slow EMA of battery voltage, updated every second
+    voltage_nominal: f64,  // reference voltage for proportional scaling (BAM nominal)
+    voltage_adapt: bool,   // whether to apply voltage-proportional action scale
     policy_enabled: bool,  // Controls whether policy inference runs
     max_linear_vel: f64,
     max_angular_vel: f64,
@@ -431,6 +445,9 @@ impl Runtime {
             record_file: args.record.clone(),
             recorded_observations: Vec::new(),
             record_voltage: 0.0,
+            voltage_ema: args.nominal_voltage,
+            voltage_nominal: args.nominal_voltage,
+            voltage_adapt: args.voltage_adapt,
             policy_enabled,
             max_linear_vel: args.max_linear_vel,
             max_angular_vel: args.max_angular_vel,
@@ -512,18 +529,26 @@ impl Runtime {
 
         println!("✓ Motors initialized and moved to default position");
 
-        // If recording, capture voltage now (motors settled, representative reading)
-        if self.record_file.is_some() {
-            match self.motor_controller.read_voltages() {
-                Ok(voltages) => {
-                    let avg = voltages.iter().map(|&v| v as f64).sum::<f64>() / voltages.len() as f64;
+        // Read voltage now (motors settled): initialise EMA and capture recording metadata.
+        // Always done so voltage_ema starts from a real reading even without --voltage-adapt.
+        match self.motor_controller.read_voltages() {
+            Ok(voltages) => {
+                let avg = voltages.iter().map(|&v| v as f64).sum::<f64>() / voltages.len() as f64;
+                self.voltage_ema = avg;
+                if self.record_file.is_some() {
                     self.record_voltage = avg;
+                }
+                if self.voltage_adapt {
+                    let eff = self.action_scale * (self.voltage_nominal / avg.clamp(6.0, 9.5));
+                    println!("✓ Voltage adapt ON: measured={:.2}V, nominal={:.1}V → effective scale={:.3}",
+                             avg, self.voltage_nominal, eff);
+                } else if self.record_file.is_some() {
                     println!("✓ Recording metadata: action_scale={:.3}, voltage={:.2}V",
                              self.action_scale, avg);
                 }
-                Err(e) => {
-                    println!("⚠ Could not read voltage for recording metadata: {}", e);
-                }
+            }
+            Err(e) => {
+                println!("⚠ Could not read voltage (using nominal {:.1}V as EMA seed): {}", self.voltage_nominal, e);
             }
         }
 
@@ -835,10 +860,18 @@ impl Runtime {
             [0.0f32; NUM_MOTORS]
         };
 
-        // Convert action offsets to motor targets: init_pos + action_scale * action
+        // Convert action offsets to motor targets: init_pos + effective_action_scale * action.
+        // When voltage_adapt is on, scale proportionally to battery voltage so that the
+        // effective kP (which scales linearly with supply voltage) stays at the nominal level.
+        let effective_action_scale = if self.voltage_adapt {
+            // Clamp EMA to [6.0, 9.5] V to guard against bad readings or extreme states.
+            self.action_scale * (self.voltage_nominal / self.voltage_ema.clamp(6.0, 9.5))
+        } else {
+            self.action_scale
+        };
         let mut motor_targets = [0.0f64; NUM_MOTORS];
         for i in 0..NUM_MOTORS {
-            motor_targets[i] = self.default_positions[i] + self.action_scale * action[i] as f64;
+            motor_targets[i] = self.default_positions[i] + effective_action_scale * action[i] as f64;
         }
 
         // Apply head offsets to neck/head joints (motor indices 5-8: neck_pitch, head_pitch, head_yaw, head_roll)
@@ -1041,20 +1074,32 @@ impl Runtime {
                     file.flush().ok();
                 }
 
-                // Battery benchmark: print elapsed and write timing log every second
-                if self.battery_benchmark {
+                // Read voltage once per second: update EMA and/or battery benchmark log.
+                // EMA is only updated when --voltage-adapt is active; benchmark always needs it.
+                if self.voltage_adapt || self.battery_benchmark {
                     let avg_voltage = self.motor_controller.read_voltages()
                         .map(|v| v.iter().map(|&x| x as f64).sum::<f64>() / v.len() as f64)
                         .unwrap_or(0.0);
-                    println!("🔋 Benchmark elapsed: {:.0}s  avg voltage: {:.2}V", total_elapsed, avg_voltage);
-                    if let Some(ref mut file) = self.benchmark_log {
-                        let current_unix = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs_f64();
-                        let elapsed = current_unix - self.benchmark_start_unix;
-                        writeln!(file, "{:.3},{:.3},{:.3},{:.3}", self.benchmark_start_unix, elapsed, current_unix, avg_voltage).ok();
-                        file.flush().ok();
+
+                    if self.voltage_adapt && avg_voltage > 0.0 {
+                        // Slow EMA: α=0.1 → ~10 s time constant at 1 sample/s.
+                        // Smooths over per-step load sags while tracking battery depletion.
+                        const VOLTAGE_EMA_ALPHA: f64 = 0.1;
+                        self.voltage_ema = VOLTAGE_EMA_ALPHA * avg_voltage
+                            + (1.0 - VOLTAGE_EMA_ALPHA) * self.voltage_ema;
+                    }
+
+                    if self.battery_benchmark {
+                        println!("🔋 Benchmark elapsed: {:.0}s  avg voltage: {:.2}V", total_elapsed, avg_voltage);
+                        if let Some(ref mut file) = self.benchmark_log {
+                            let current_unix = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs_f64();
+                            let elapsed = current_unix - self.benchmark_start_unix;
+                            writeln!(file, "{:.3},{:.3},{:.3},{:.3}", self.benchmark_start_unix, elapsed, current_unix, avg_voltage).ok();
+                            file.flush().ok();
+                        }
                     }
                 }
             }
@@ -1134,10 +1179,17 @@ impl Runtime {
                 .map(|d| d.as_secs_f64())
                 .unwrap_or(0.0);
 
+            // Use voltage_ema if it was updated during the session (voltage_adapt or always-read),
+            // otherwise fall back to the startup snapshot (record_voltage).
+            let recorded_voltage = if self.voltage_ema != self.voltage_nominal {
+                self.voltage_ema
+            } else {
+                self.record_voltage
+            };
             let recording = RecordingData {
                 metadata: RecordingMetadata {
-                    action_scale: self.action_scale,
-                    voltage_v:    self.record_voltage,
+                    action_scale: self.action_scale,  // base scale; sysid computes effective = base * (7.4 / voltage_v)
+                    voltage_v:    recorded_voltage,
                     freq_hz:      self.control_freq,
                     unix_time,
                 },
@@ -1151,7 +1203,7 @@ impl Runtime {
                 .context("Failed to serialize observations to pickle format")?;
 
             println!("✓ Recorded observations saved to {} (action_scale={:.3}, voltage={:.2}V)",
-                     path, self.action_scale, self.record_voltage);
+                     path, self.action_scale, recorded_voltage);
         }
 
         // Flush and close log file if it exists
