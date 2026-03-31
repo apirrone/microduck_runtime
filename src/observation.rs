@@ -1,5 +1,5 @@
 use crate::imu::ImuData;
-use crate::motor::{MotorState, NUM_MOTORS, DEFAULT_POSITION};
+use crate::motor::{MotorState, NUM_MOTORS};
 
 /// Maximum observation size (with phase)
 pub const MAX_OBSERVATION_SIZE: usize = 56;
@@ -28,6 +28,7 @@ impl Observation {
         command: &[f64; 3],
         motor_state: &MotorState,
         last_action: &[f32; NUM_MOTORS],
+        default_positions: &[f64; NUM_MOTORS],
     ) -> Self {
         let mut data = [0.0f32; MAX_OBSERVATION_SIZE];
         let mut idx = 0;
@@ -48,7 +49,7 @@ impl Observation {
 
         // Joint positions relative to default position (14)
         for i in 0..NUM_MOTORS {
-            data[idx] = (motor_state.positions[i] - DEFAULT_POSITION[i]) as f32;
+            data[idx] = (motor_state.positions[i] - default_positions[i]) as f32;
             idx += 1;
         }
 
@@ -104,7 +105,7 @@ impl Default for Observation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::motor::MotorState;
+    use crate::motor::{MotorState, DEFAULT_POSITION};
 
     #[test]
     fn test_observation_size() {
@@ -123,7 +124,7 @@ mod tests {
         let motor_state = MotorState::default();
         let last_action = [0.0f32; NUM_MOTORS];
 
-        let obs = Observation::new(&imu, &command, &motor_state, &last_action);
+        let obs = Observation::new(&imu, &command, &motor_state, &last_action, &DEFAULT_POSITION);
         let slice = obs.as_slice();
 
         assert_eq!(obs.size(), 51);
