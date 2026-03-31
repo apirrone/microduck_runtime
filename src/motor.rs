@@ -304,6 +304,88 @@ impl MotorController {
         Ok(())
     }
 
+    /// Check and correct EEPROM configuration registers for all motors (body + mouth).
+    /// Verifies: return_delay_time=0, baud_rate=3 (1 Mbps), homing_offset=0, pwm_slope=255, shutdown=52.
+    /// Writes any register that doesn't match. Torque must be disabled before calling.
+    /// Mouth motor failures are non-fatal (warned and skipped).
+    pub fn check_and_fix_config(&mut self) -> Result<()> {
+        let mut total_fixes = 0usize;
+
+        for &id in MOTOR_IDS.iter() {
+            total_fixes += self.check_and_fix_motor_config(id)
+                .map_err(|e| anyhow::anyhow!("Motor {}: {}", id, e))?;
+        }
+
+        match self.check_and_fix_motor_config(MOUTH_MOTOR_ID) {
+            Ok(n) => total_fixes += n,
+            Err(e) => println!("⚠ Mouth motor (ID {}) config check failed: {}", MOUTH_MOTOR_ID, e),
+        }
+
+        if total_fixes == 0 {
+            println!("✓ All motor config registers correct");
+        } else {
+            println!("✓ Motor config: corrected {} register(s)", total_fixes);
+        }
+
+        Ok(())
+    }
+
+    fn check_and_fix_motor_config(&mut self, id: u8) -> Result<usize> {
+        let mut fixes = 0usize;
+
+        // return_delay_time: 0
+        let val = self.controller.read_return_delay_time(id)
+            .map_err(|e| anyhow::anyhow!("read return_delay_time: {}", e))?[0];
+        if val != 0 {
+            println!("  Motor {}: fixing return_delay_time {} -> 0", id, val);
+            self.controller.write_return_delay_time(id, 0u8)
+                .map_err(|e| anyhow::anyhow!("write return_delay_time: {}", e))?;
+            fixes += 1;
+        }
+
+        // baud_rate register: 3 = 1,000,000 bps
+        let val = self.controller.read_baud_rate(id)
+            .map_err(|e| anyhow::anyhow!("read baud_rate: {}", e))?[0];
+        if val != 3 {
+            println!("  Motor {}: fixing baud_rate {} -> 3 (1000000)", id, val);
+            self.controller.write_baud_rate(id, 3u8)
+                .map_err(|e| anyhow::anyhow!("write baud_rate: {}", e))?;
+            fixes += 1;
+        }
+
+        // homing_offset: 0
+        let val = self.controller.read_homing_offset(id)
+            .map_err(|e| anyhow::anyhow!("read homing_offset: {}", e))?[0];
+        if val != 0 {
+            println!("  Motor {}: fixing homing_offset {} -> 0", id, val);
+            self.controller.write_homing_offset(id, 0i32)
+                .map_err(|e| anyhow::anyhow!("write homing_offset: {}", e))?;
+            fixes += 1;
+        }
+
+        // pwm_slope: 255
+        let val = self.controller.read_pwm_slope(id)
+            .map_err(|e| anyhow::anyhow!("read pwm_slope: {}", e))?[0];
+        if val != 255 {
+            println!("  Motor {}: fixing pwm_slope {} -> 255", id, val);
+            self.controller.write_pwm_slope(id, 255u8)
+                .map_err(|e| anyhow::anyhow!("write pwm_slope: {}", e))?;
+            fixes += 1;
+        }
+
+        // shutdown: 52
+        let val = self.controller.read_shutdown(id)
+            .map_err(|e| anyhow::anyhow!("read shutdown: {}", e))?[0];
+        if val != 52 {
+            println!("  Motor {}: fixing shutdown {} -> 52", id, val);
+            self.controller.write_shutdown(id, 52u8)
+                .map_err(|e| anyhow::anyhow!("write shutdown: {}", e))?;
+            fixes += 1;
+        }
+
+        Ok(fixes)
+    }
+
     /// Set PID gains for all motors
     pub fn set_pid_gains(&mut self, kp: u16, ki: u16, kd: u16) -> Result<()> {
         for &id in &MOTOR_IDS {

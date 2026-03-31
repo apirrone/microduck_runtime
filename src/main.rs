@@ -501,6 +501,10 @@ impl Runtime {
     fn initialize_motors(&mut self) -> Result<()> {
         println!("Initializing motors...");
 
+        // Check and correct EEPROM configuration (torque must be off)
+        self.motor_controller.check_and_fix_config()
+            .context("Failed to check motor configuration")?;
+
         // Set PID gains
         let (kp, ki, kd) = self.pid_gains;
         println!("Setting PID gains: kP={}, kI={}, kD={}", kp, ki, kd);
