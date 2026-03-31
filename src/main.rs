@@ -849,6 +849,7 @@ impl Runtime {
             obs_command,
             &motor_state,
             &self.last_action,
+            &self.default_positions,
         );
 
         // Run policy inference (or hold default position if policy disabled)
