@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use linux_embedded_hal::{Delay, I2cdev};
 use embedded_hal::i2c::I2c;
 use bno055::{Bno055, BNO055AxisSign, BNO055Calibration};
+use bmi088::{Bmi088, Bmi088Ahrs, Config as Bmi088Config};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -741,12 +742,111 @@ impl Bno08xController {
     }
 }
 
+// --- BMI088 Controller ---
+
+/// IMU controller for BMI088 sensor.
+///
+/// Uses a Madgwick AHRS filter (via the `bmi088` crate) to fuse accelerometer
+/// and gyroscope data into a quaternion, then extracts projected gravity from it.
+///
+/// Note: The BMI088 has no hardware axis-remapping registers. Configure the
+/// physical mounting orientation via `bmi088::AxisRemap` on the inner driver
+/// before passing it to this controller, or use `new_with_remap`.
+pub struct Bmi088Controller {
+    ahrs: Bmi088Ahrs<I2cdev>,
+    gravity_offset: [f64; 3],
+    last_read: std::time::Instant,
+    gyro_history: [[f64; 3]; 2],
+    accel_history: [[f64; 3]; 2],
+}
+
+impl Bmi088Controller {
+    /// Create with default settings on `/dev/i2c-1` (identity axis mapping).
+    pub fn new_default() -> Result<Self> {
+        Self::new_with_remap("/dev/i2c-1", bmi088::AxisRemap::default())
+    }
+
+    /// Create on the given I2C device with a custom axis remap.
+    ///
+    /// Use the remap to compensate for the physical mounting orientation of the
+    /// BMI088 on the board (the sensor has no hardware remapping registers).
+    pub fn new_with_remap(i2c_device: &str, remap: bmi088::AxisRemap) -> Result<Self> {
+        let i2c = I2cdev::new(i2c_device)
+            .context(format!("Failed to open I2C device: {}", i2c_device))?;
+        let mut imu = Bmi088::new(i2c, Bmi088Config::default())
+            .map_err(|e| anyhow::anyhow!("Failed to initialize BMI088: {:?}", e))?;
+        imu.set_axis_remap(remap);
+        let ahrs = Bmi088Ahrs::new(imu, 0.1);
+        Ok(Self {
+            ahrs,
+            gravity_offset: [0.0; 3],
+            last_read: std::time::Instant::now(),
+            gyro_history: [[0.0; 3]; 2],
+            accel_history: [[0.0; 3]; 2],
+        })
+    }
+
+    pub fn set_gravity_offset(&mut self, offset: [f64; 3]) {
+        self.gravity_offset = offset;
+        println!("Set gravity offset: [{:.4}, {:.4}, {:.4}]", offset[0], offset[1], offset[2]);
+    }
+
+    pub fn get_gravity_offset(&self) -> [f64; 3] {
+        self.gravity_offset
+    }
+
+    pub fn read(&mut self) -> Result<ImuData> {
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(self.last_read).as_secs_f32().clamp(0.001, 0.5);
+        self.last_read = now;
+
+        let (gyro_raw_f32, quat_f32) = self.ahrs.update(dt)
+            .map_err(|e| anyhow::anyhow!("Failed to read BMI088: {:?}", e))?;
+
+        let gyro_raw = [
+            gyro_raw_f32[0] as f64,
+            gyro_raw_f32[1] as f64,
+            gyro_raw_f32[2] as f64,
+        ];
+        let quat = [
+            quat_f32[0] as f64,
+            quat_f32[1] as f64,
+            quat_f32[2] as f64,
+            quat_f32[3] as f64,
+        ];
+
+        // Madgwick quaternion is body→world; apply inverse to project world gravity into body frame
+        let world_gravity = [0.0, 0.0, -1.0];
+        let accel_raw = quat_rotate_vec_inverse(quat, world_gravity);
+        let accel_final = finalize_gravity(accel_raw, self.gravity_offset);
+
+        let gyro_filtered = [
+            median3(self.gyro_history[0][0], self.gyro_history[1][0], gyro_raw[0]),
+            median3(self.gyro_history[0][1], self.gyro_history[1][1], gyro_raw[1]),
+            median3(self.gyro_history[0][2], self.gyro_history[1][2], gyro_raw[2]),
+        ];
+        self.gyro_history[0] = self.gyro_history[1];
+        self.gyro_history[1] = gyro_raw;
+
+        let accel_filtered = [
+            median3(self.accel_history[0][0], self.accel_history[1][0], accel_final[0]),
+            median3(self.accel_history[0][1], self.accel_history[1][1], accel_final[1]),
+            median3(self.accel_history[0][2], self.accel_history[1][2], accel_final[2]),
+        ];
+        self.accel_history[0] = self.accel_history[1];
+        self.accel_history[1] = accel_final;
+
+        Ok(ImuData { gyro: gyro_filtered, accel: accel_filtered })
+    }
+}
+
 // --- Unified IMU controller ---
 
-/// Wraps either a BNO055 or BNO08X controller behind a common interface
+/// Wraps a BNO055, BNO08X, or BMI088 controller behind a common interface
 pub enum AnyImuController {
     Bno055(ImuController),
     Bno08x(Bno08xController),
+    Bmi088(Bmi088Controller),
 }
 
 impl AnyImuController {
@@ -754,6 +854,7 @@ impl AnyImuController {
         match self {
             AnyImuController::Bno055(c) => c.read(),
             AnyImuController::Bno08x(c) => c.read(),
+            AnyImuController::Bmi088(c) => c.read(),
         }
     }
 
@@ -761,6 +862,7 @@ impl AnyImuController {
         match self {
             AnyImuController::Bno055(c) => c.set_gravity_offset(offset),
             AnyImuController::Bno08x(c) => c.set_gravity_offset(offset),
+            AnyImuController::Bmi088(c) => c.set_gravity_offset(offset),
         }
     }
 
@@ -768,6 +870,7 @@ impl AnyImuController {
         match self {
             AnyImuController::Bno055(c) => c.get_gravity_offset(),
             AnyImuController::Bno08x(c) => c.get_gravity_offset(),
+            AnyImuController::Bmi088(c) => c.get_gravity_offset(),
         }
     }
 }

@@ -6,7 +6,7 @@ mod controller;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use imu::{ImuController, Bno08xController, AnyImuController};
+use imu::{ImuController, Bno08xController, Bmi088Controller, AnyImuController};
 use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE};
 use observation::Observation;
 use policy::Policy;
@@ -106,6 +106,11 @@ struct Args {
     /// Connects via I2C at address 0x4A (default) on /dev/i2c-1
     #[arg(long)]
     bno08x: bool,
+
+    /// Use BMI088 IMU instead of the default BNO055
+    /// Connects via I2C on /dev/i2c-1 (accel 0x19, gyro 0x68)
+    #[arg(long)]
+    bmi088: bool,
 
     /// Optional CSV log file to save observations and actions
     #[arg(long)]
@@ -300,6 +305,11 @@ impl Runtime {
                 .context("Failed to initialize IMU controller (BNO08X on /dev/i2c-1 at 0x4B)")?;
             println!("✓ IMU controller initialized (BNO08X) - using projected gravity from rotation vector");
             AnyImuController::Bno08x(ctrl)
+        } else if args.bmi088 {
+            let ctrl = Bmi088Controller::new_default()
+                .context("Failed to initialize IMU controller (BMI088 on /dev/i2c-1)")?;
+            println!("✓ IMU controller initialized (BMI088) - using projected gravity from Madgwick filter");
+            AnyImuController::Bmi088(ctrl)
         } else {
             let use_projected_gravity = !args.raw_accelerometer;
             let ctrl = ImuController::new_default_with_mode(use_projected_gravity)
