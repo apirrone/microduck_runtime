@@ -761,9 +761,13 @@ pub struct Bmi088Controller {
 }
 
 impl Bmi088Controller {
-    /// Create with default settings on `/dev/i2c-1` (identity axis mapping).
+    /// Create with default settings on `/dev/i2c-1`.
+    /// Axis remap: X and Y inverted, Z unchanged.
     pub fn new_default() -> Result<Self> {
-        Self::new_with_remap("/dev/i2c-1", bmi088::AxisRemap::default())
+        Self::new_with_remap("/dev/i2c-1", bmi088::AxisRemap {
+            axes: [0, 1, 2],
+            signs: [-1.0, -1.0, 1.0],
+        })
     }
 
     /// Create on the given I2C device with a custom axis remap.
