@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use microduck_runtime::imu::{ImuController, Bno08xController, AnyImuController};
+use microduck_runtime::imu::{ImuController, Bno08xController, Bmi088Controller, AnyImuController};
 use std::thread;
 use std::time::Duration;
 
@@ -10,6 +10,10 @@ struct Args {
     /// Use BNO08X IMU (BNO080/085/086) instead of the default BNO055
     #[arg(long)]
     bno08x: bool,
+
+    /// Use BMI088 IMU instead of the default BNO055
+    #[arg(long)]
+    bmi088: bool,
 
     /// Use projected gravity from quaternion instead of raw accelerometer (BNO055 only)
     #[arg(long)]
@@ -26,6 +30,8 @@ fn main() -> Result<()> {
     println!("╔════════════════════════════════════════════════════════════════╗");
     if args.bno08x {
         println!("║                   BNO08X IMU Test                            ║");
+    } else if args.bmi088 {
+        println!("║                   BMI088 IMU Test                            ║");
     } else {
         println!("║                   BNO055 IMU Test                            ║");
     }
@@ -39,6 +45,13 @@ fn main() -> Result<()> {
         println!("✓ BNO08X initialized");
         println!("  Mode: rotation vector (sensor fusion)");
         AnyImuController::Bno08x(ctrl)
+    } else if args.bmi088 {
+        println!("Initializing BMI088 on /dev/i2c-1...");
+        let ctrl = Bmi088Controller::new_default()
+            .map_err(|e| anyhow::anyhow!("Failed to init BMI088: {}", e))?;
+        println!("✓ BMI088 initialized");
+        println!("  Mode: projected gravity from Madgwick filter");
+        AnyImuController::Bmi088(ctrl)
     } else {
         println!("Initializing BNO055 on /dev/i2c-1 at 0x29...");
         let ctrl = ImuController::new_default_with_mode(args.projected_gravity)
