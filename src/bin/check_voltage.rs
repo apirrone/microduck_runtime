@@ -11,6 +11,7 @@ const MOTOR_NAMES: [&str; NUM_MOTORS] = [
     "head_pitch",
     "head_yaw",
     "head_roll",
+    "mouth_motor",
     "right_hip_yaw",
     "right_hip_roll",
     "right_hip_pitch",
