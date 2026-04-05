@@ -7,7 +7,7 @@ mod controller;
 use anyhow::{Context, Result};
 use clap::Parser;
 use imu::{ImuController, Bno08xController, Bmi088Controller, AnyImuController};
-use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE};
+use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MOTOR_IDX, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE};
 use observation::Observation;
 use policy::Policy;
 use controller::Controller;
@@ -179,10 +179,6 @@ struct Args {
     #[arg(long, default_value_t = 0.2)]
     cmd_alpha: f64,
 
-    /// Position P gain for mouth motor (ID 34)
-    #[arg(long, default_value_t = 400)]
-    mouth_kp: u16,
-
     /// Estimate mean and peak current draw across all 14 body motors during the session.
     /// Samples are collected once per second and the results are printed at shutdown.
     #[arg(long)]
@@ -217,6 +213,12 @@ struct Args {
     /// kP multiplier applied to all motors during ground pick (e.g. 0.6 = 40% reduction)
     #[arg(long, default_value_t = 0.6)]
     ground_pick_kp_ratio: f64,
+
+    /// Enable 15-DOF mode: mouth_motor is part of the policy (use with new policies trained with mouth).
+    /// Without this flag, the runtime runs in 14-DOF legacy mode: mouth is excluded from the policy
+    /// observation/action and is controlled directly via the right trigger.
+    #[arg(long)]
+    mouth: bool,
 
     /// Apply a low-pass filter to head/neck joint commands to reduce oscillation on lightly-loaded joints
     #[arg(long)]
@@ -254,6 +256,9 @@ struct Runtime {
     max_angular_vel: f64,
     controller_deadzone: f32,
     start_button_prev_state: bool,  // Track Start button state for edge detection
+    mouth_enabled: bool,  // Whether mouth is part of the policy (--mouth flag)
+    mouth_position: f64,  // Legacy mode: absolute mouth position from trigger (not used in mouth mode)
+    mouth_offset: f64,    // Mouth mode: additive offset on top of policy mouth output (right trigger)
     head_mode: bool,  // Head control mode (Y button)
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
     default_positions: [f64; NUM_MOTORS],  // per-run override of DEFAULT_POSITION
@@ -266,9 +271,6 @@ struct Runtime {
     b_button_prev_state: bool,  // Track B button state for edge detection
     fallen: bool,  // Whether the robot is currently detected as fallen
     fall_detected_since: Option<Instant>,  // When continuous fall detection started (for debounce)
-    mouth_position: f64,  // Current mouth motor position in radians (0 to MOUTH_MAX_ANGLE)
-    mouth_kp: u16,  // Position P gain for mouth motor
-    mouth_available: bool,  // Whether the mouth motor (ID 34) is connected
     // Ground pick
     ground_pick_active: bool,
     ground_pick_phase: f64,
@@ -475,6 +477,9 @@ impl Runtime {
             max_angular_vel: args.max_angular_vel,
             controller_deadzone: args.controller_deadzone,
             start_button_prev_state: false,
+            mouth_enabled: args.mouth,
+            mouth_position: MOUTH_MIN_ANGLE,
+            mouth_offset: 0.0,
             head_mode: false,
             head_offsets: [0.0; 4],
             default_positions: {
@@ -492,9 +497,6 @@ impl Runtime {
             b_button_prev_state: false,
             fallen: false,
             fall_detected_since: None,
-            mouth_position: MOUTH_MIN_ANGLE,
-            mouth_kp: args.mouth_kp,
-            mouth_available: false,
             ground_pick_active: false,
             ground_pick_phase: 0.0,
             ground_pick_period: args.ground_pick_period,
@@ -544,17 +546,6 @@ impl Runtime {
         // Enable torque on all motors
         self.motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
-
-        // Initialize mouth motor (ID 34) — optional, continue if not connected
-        match self.motor_controller.init_mouth_motor(self.mouth_kp, ki, kd) {
-            Ok(()) => {
-                self.mouth_available = true;
-                println!("✓ Mouth motor (ID 34) initialized (kP={})", self.mouth_kp);
-            }
-            Err(e) => {
-                println!("⚠ Mouth motor (ID 34) not available, skipping: {}", e);
-            }
-        }
 
         // Smoothly interpolate to default position over 3 seconds
         println!("Moving to default position over 1 second...");
@@ -716,8 +707,13 @@ impl Runtime {
                 }
             }
 
-            // Right trigger controls mouth (0 → -10°, 1 → 70°), independent from policy
-            self.mouth_position = MOUTH_MIN_ANGLE + state.right_trigger as f64 * (MOUTH_MAX_ANGLE - MOUTH_MIN_ANGLE);
+            // Right trigger controls mouth: offset (mouth mode) or absolute position (legacy mode)
+            let mouth_range = MOUTH_MAX_ANGLE - MOUTH_MIN_ANGLE;
+            if self.mouth_enabled {
+                self.mouth_offset = state.right_trigger as f64 * mouth_range;
+            } else {
+                self.mouth_position = MOUTH_MIN_ANGLE + state.right_trigger as f64 * mouth_range;
+            }
 
             // Handle Start button to toggle policy inference (or recover from fall)
             let start_pressed = self.controller.is_button_pressed("Start");
@@ -884,11 +880,12 @@ impl Runtime {
             &motor_state,
             &self.last_action,
             &self.default_positions,
+            self.mouth_enabled,
         );
 
         // Run policy inference (or hold default position if policy disabled)
         let action = if self.policy_enabled {
-            self.policy.infer(&observation, effective_command)
+            self.policy.infer(&observation, effective_command, self.mouth_enabled)
                 .context("Failed to run policy inference")?
         } else {
             // During standby, use zero actions (hold default position)
@@ -912,6 +909,13 @@ impl Runtime {
         // Apply head offsets to neck/head joints (motor indices 5-8: neck_pitch, head_pitch, head_yaw, head_roll)
         for i in 0..4 {
             motor_targets[5 + i] += self.head_offsets[i];
+        }
+
+        // Mouth motor (index 9): policy + trigger offset in mouth mode, trigger absolute in legacy mode
+        if self.mouth_enabled {
+            motor_targets[MOUTH_MOTOR_IDX] += self.mouth_offset;
+        } else {
+            motor_targets[MOUTH_MOTOR_IDX] = self.mouth_position;
         }
 
         // Low-pass filter for head/neck joints to suppress oscillation on lightly-loaded joints
@@ -963,11 +967,6 @@ impl Runtime {
 
         self.motor_controller.write_goal_positions(&motor_targets)
             .context("Failed to write motor positions")?;
-
-        if self.mouth_available {
-            self.motor_controller.write_mouth_position(self.mouth_position)
-                .context("Failed to write mouth position")?;
-        }
 
         // Update last action
         self.last_action = action;

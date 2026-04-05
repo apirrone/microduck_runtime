@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crate::motor::NUM_MOTORS;
+use crate::motor::{NUM_MOTORS, MOUTH_MOTOR_IDX};
 use crate::observation::Observation;
 use ort::session::{Session, builder::GraphOptimizationLevel};
 use ort::value::Value;
@@ -129,11 +129,11 @@ impl Policy {
     ///
     /// # Returns
     /// Action vector (14 dimensions) for motor position offsets
-    pub fn infer(&mut self, observation: &Observation, command: &[f64; 3]) -> Result<[f32; NUM_MOTORS]> {
+    pub fn infer(&mut self, observation: &Observation, command: &[f64; 3], mouth_enabled: bool) -> Result<[f32; NUM_MOTORS]> {
         // Ground pick takes priority when active
         if self.ground_pick_active {
             if let Some(ref mut gp_mode) = self.ground_pick_mode {
-                return Self::run_mode(gp_mode, observation, self.start_time);
+                return Self::run_mode(gp_mode, observation, self.start_time, false); // ground pick always legacy 14-DOF
             }
         }
 
@@ -150,10 +150,10 @@ impl Policy {
             &mut self.mode
         };
 
-        Self::run_mode(policy_mode, observation, self.start_time)
+        Self::run_mode(policy_mode, observation, self.start_time, mouth_enabled)
     }
 
-    fn run_mode(policy_mode: &mut PolicyMode, observation: &Observation, start_time: Instant) -> Result<[f32; NUM_MOTORS]> {
+    fn run_mode(policy_mode: &mut PolicyMode, observation: &Observation, start_time: Instant, mouth_enabled: bool) -> Result<[f32; NUM_MOTORS]> {
         match policy_mode {
             PolicyMode::Dummy => {
                 // Dummy policy: generate squatting motion
@@ -206,20 +206,47 @@ impl Policy {
                     .try_extract_tensor::<f32>()
                     .map_err(|e| anyhow::anyhow!("Failed to extract output tensor: {}", e))?;
 
-                // Verify output shape
+                // Verify output shape — accept 14 (legacy, no mouth) or 15 (mouth mode)
                 let shape_dims = output_shape.as_ref();
-                if shape_dims.len() != 2 || shape_dims[1] != NUM_MOTORS as i64 {
+                let expected_actions: usize = if mouth_enabled { 15 } else { 14 };
+                if shape_dims.len() != 2 || shape_dims[1] != expected_actions as i64 {
+                    let actual = if shape_dims.len() >= 2 { shape_dims[1] } else { -1 };
+                    if !mouth_enabled && actual == 15 {
+                        return Err(anyhow::anyhow!(
+                            "Policy outputs 15 actions (mouth DOF included) but --mouth was not set. \
+                             Add --mouth to use this policy, or load a 14-DOF policy for legacy mode."
+                        ));
+                    } else if mouth_enabled && actual == 14 {
+                        return Err(anyhow::anyhow!(
+                            "Policy outputs 14 actions (no mouth DOF) but --mouth was set. \
+                             Remove --mouth to run this policy in legacy mode."
+                        ));
+                    }
                     return Err(anyhow::anyhow!(
-                        "Unexpected output shape: {:?}, expected [1, {}]",
-                        shape_dims,
-                        NUM_MOTORS
+                        "Unexpected policy output shape: {:?}, expected [1, {}]",
+                        shape_dims, expected_actions
                     ));
                 }
 
-                // Copy output to actions array
+                // Copy output to actions array.
+                // In legacy mode (14 outputs): insert 0 at MOUTH_MOTOR_IDX so the
+                // rest of the pipeline always works with a 15-element array.
                 let mut actions = [0.0f32; NUM_MOTORS];
-                for i in 0..NUM_MOTORS {
-                    actions[i] = output_data[i];
+                if mouth_enabled {
+                    for i in 0..NUM_MOTORS {
+                        actions[i] = output_data[i];
+                    }
+                } else {
+                    // Map 14 outputs → 15 slots, skipping MOUTH_MOTOR_IDX (mouth stays at 0 = default)
+                    let mut out_idx = 0;
+                    for i in 0..NUM_MOTORS {
+                        if i == MOUTH_MOTOR_IDX {
+                            actions[i] = 0.0; // overridden by trigger below
+                        } else {
+                            actions[i] = output_data[out_idx];
+                            out_idx += 1;
+                        }
+                    }
                 }
 
                 Ok(actions)

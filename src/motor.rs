@@ -7,17 +7,20 @@ use std::time::Duration;
 /// Set to false to use separate position/velocity reads (slower but more reliable)
 const USE_BULK_READ: bool = true;
 
-/// Number of motors on the microduck robot
-pub const NUM_MOTORS: usize = 14;
+/// Number of motors on the microduck robot (15: left leg + neck/head/mouth + right leg)
+pub const NUM_MOTORS: usize = 15;
 
-/// Mouth motor ID (independent from policy)
+/// Index of the mouth motor in MOTOR_IDS / action vectors
+pub const MOUTH_MOTOR_IDX: usize = 9;
+
+/// Mouth motor Dynamixel ID
 pub const MOUTH_MOTOR_ID: u8 = 34;
 
-/// Mouth motor range: -10° to 70°
-pub const MOUTH_MIN_ANGLE: f64 = -10.0 * PI / 180.0;
-pub const MOUTH_MAX_ANGLE: f64 = 70.0 * PI / 180.0;
+/// Mouth motor position range (radians): -10° to 70°
+pub const MOUTH_MIN_ANGLE: f64 = -10.0 * std::f64::consts::PI / 180.0;
+pub const MOUTH_MAX_ANGLE: f64 =  70.0 * std::f64::consts::PI / 180.0;
 
-/// Motor IDs in order: left leg (5), neck/head (4), right leg (5)
+/// Motor IDs in order: left leg (5), neck/head/mouth (5), right leg (5)
 /// This order matches the observation/action vector indices
 pub const MOTOR_IDS: [u8; NUM_MOTORS] = [
     20, // [0]  left_hip_yaw
@@ -29,33 +32,35 @@ pub const MOTOR_IDS: [u8; NUM_MOTORS] = [
     31, // [6]  head_pitch
     32, // [7]  head_yaw
     33, // [8]  head_roll
-    10, // [9]  right_hip_yaw
-    11, // [10] right_hip_roll
-    12, // [11] right_hip_pitch
-    13, // [12] right_knee
-    14, // [13] right_ankle
+    34, // [9]  mouth_motor
+    10, // [10] right_hip_yaw
+    11, // [11] right_hip_roll
+    12, // [12] right_hip_pitch
+    13, // [13] right_knee
+    14, // [14] right_ankle
 ];
 
 /// Default/initial position for all motors (bent legs position)
-/// Order matches MOTOR_IDS: left leg (5), neck/head (4), right leg (5)
+/// Order matches MOTOR_IDS: left leg (5), neck/head/mouth (5), right leg (5)
 /// These values MUST match HOME_FRAME in microduck_constants.py for consistency with RL training
 pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [
-    0.0, // left_hip_yaw
-    0.0, // left_hip_roll
-    0.6, // left_hip_pitch
+    0.0,  // left_hip_yaw
+    0.0,  // left_hip_roll
+    0.6,  // left_hip_pitch
     -1.2, // left_knee
-    0.6, // left_ankle (was 0.5 - FIXED to match training)
+    0.6,  // left_ankle
 
-    -0.5, // neck_pitch
-    0.5, // head_pitch
-    0.0, // head_yaw
-    0.0, // head_roll
+    -0.5, // neck_pitch      (override via --neck-pitch-default)
+    0.5,  // head_pitch      (override via --head-pitch-default)
+    0.0,  // head_yaw
+    0.0,  // head_roll
+    0.0,  // mouth_motor
 
-    0.0, // right_hip_yaw
-    0.0, // right_hip_roll
+    0.0,  // right_hip_yaw
+    0.0,  // right_hip_roll
     -0.6, // right_hip_pitch
-    1.2, // right_knee
-    -0.6, // right_ankle (was -0.7 - FIXED to match training)
+    1.2,  // right_knee
+    -0.6, // right_ankle
 ];
 
 /// Conversion factor for velocity: 0.229 RPM per count * (2π / 60) for rad/s
@@ -245,31 +250,6 @@ impl MotorController {
         Ok(voltages)
     }
 
-    /// Initialize the mouth motor: enable torque and set PID gains
-    pub fn init_mouth_motor(&mut self, kp: u16, ki: u16, kd: u16) -> Result<()> {
-        self.controller
-            .write_torque_enable(MOUTH_MOTOR_ID, true)
-            .map_err(|e| anyhow::anyhow!("Failed to enable torque for mouth motor: {}", e))?;
-        self.controller
-            .write_position_p_gain(MOUTH_MOTOR_ID, kp)
-            .map_err(|e| anyhow::anyhow!("Failed to set P gain for mouth motor: {}", e))?;
-        self.controller
-            .write_position_i_gain(MOUTH_MOTOR_ID, ki)
-            .map_err(|e| anyhow::anyhow!("Failed to set I gain for mouth motor: {}", e))?;
-        self.controller
-            .write_position_d_gain(MOUTH_MOTOR_ID, kd)
-            .map_err(|e| anyhow::anyhow!("Failed to set D gain for mouth motor: {}", e))?;
-        Ok(())
-    }
-
-    /// Write goal position for the mouth motor (in radians)
-    pub fn write_mouth_position(&mut self, pos_rad: f64) -> Result<()> {
-        self.controller
-            .sync_write_goal_position(&[MOUTH_MOTOR_ID], &[pos_rad])
-            .map_err(|e| anyhow::anyhow!("Failed to write mouth position: {}", e))?;
-        Ok(())
-    }
-
     /// Smoothly interpolate all motors from their current positions to DEFAULT_POSITION.
     /// Reads current positions once, then linearly interpolates over `duration` at 50 Hz.
     pub fn interpolate_to_default(&mut self, duration: Duration) -> Result<()> {
@@ -304,21 +284,15 @@ impl MotorController {
         Ok(())
     }
 
-    /// Check and correct EEPROM configuration registers for all motors (body + mouth).
+    /// Check and correct EEPROM configuration registers for all motors.
     /// Verifies: return_delay_time=0, baud_rate=3 (1 Mbps), homing_offset=0, pwm_slope=255, shutdown=52.
     /// Writes any register that doesn't match. Torque must be disabled before calling.
-    /// Mouth motor failures are non-fatal (warned and skipped).
     pub fn check_and_fix_config(&mut self) -> Result<()> {
         let mut total_fixes = 0usize;
 
         for &id in MOTOR_IDS.iter() {
             total_fixes += self.check_and_fix_motor_config(id)
                 .map_err(|e| anyhow::anyhow!("Motor {}: {}", id, e))?;
-        }
-
-        match self.check_and_fix_motor_config(MOUTH_MOTOR_ID) {
-            Ok(n) => total_fixes += n,
-            Err(e) => println!("⚠ Mouth motor (ID {}) config check failed: {}", MOUTH_MOTOR_ID, e),
         }
 
         if total_fixes == 0 {
