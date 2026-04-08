@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_observation_creation_legacy() {
-        let imu = ImuData { gyro: [1.0, 2.0, 3.0], accel: [4.0, 5.0, 6.0] };
+        let imu = ImuData { gyro: [1.0, 2.0, 3.0], accel: [4.0, 5.0, 6.0], ..ImuData::default() };
         let command = [0.1, 0.2, 0.3];
         let motor_state = MotorState::default();
         let last_action = [0.0f32; NUM_MOTORS];
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_observation_creation_mouth() {
-        let imu = ImuData { gyro: [1.0, 2.0, 3.0], accel: [4.0, 5.0, 6.0] };
+        let imu = ImuData { gyro: [1.0, 2.0, 3.0], accel: [4.0, 5.0, 6.0], ..ImuData::default() };
         let command = [0.1, 0.2, 0.3];
         let motor_state = MotorState::default();
         let last_action = [0.0f32; NUM_MOTORS];

@@ -1,0 +1,11 @@
+[project]
+name = "microduck-fk"
+version = "0.1.0"
+description = "Forward kinematics for the microduck robot using Placo"
+requires-python = ">=3.9"
+dependencies = [
+    "placo>=0.9.20",
+    "numpy>=1.24",
+    "mujoco>=3.5.0",
+]
+

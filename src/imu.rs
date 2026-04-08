@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-/// IMU data containing gyroscope and normalized projected gravity
+/// IMU data containing gyroscope, normalized projected gravity, and orientation quaternion
 #[derive(Debug, Clone, Copy)]
 pub struct ImuData {
     /// Gyroscope data [x, y, z] in rad/s (angular velocity in body frame)
@@ -21,6 +21,10 @@ pub struct ImuData {
     /// Includes dynamic accelerations, impacts, and vibrations (unlike pure projected gravity).
     /// When at rest upright: points down [0, 0, -1]
     pub accel: [f64; 3],
+    /// Orientation quaternion [w, x, y, z] (body→world, scalar-first convention)
+    /// Represents the orientation of trunk_base in the world frame.
+    /// Defaults to identity (upright, no rotation).
+    pub quat: [f64; 4],
 }
 
 impl Default for ImuData {
@@ -28,6 +32,7 @@ impl Default for ImuData {
         Self {
             gyro: [0.0; 3],
             accel: [0.0, 0.0, -1.0], // Default normalized projected gravity (upright robot, unit vector pointing down)
+            quat: [1.0, 0.0, 0.0, 0.0], // Identity quaternion (no rotation)
         }
     }
 }
@@ -310,21 +315,19 @@ impl ImuController {
         self.gyro_history[0] = self.gyro_history[1];
         self.gyro_history[1] = gyro_raw;
 
+        // Always read quaternion for orientation tracking (used by streaming / digital twin)
+        let quat_mint = self.imu.quaternion()
+            .map_err(|e| anyhow::anyhow!("Failed to read quaternion: {:?}", e))?;
+        let quat = [
+            quat_mint.s as f64,    // w (scalar part)
+            quat_mint.v.x as f64,  // x (vector part)
+            quat_mint.v.y as f64,  // y
+            quat_mint.v.z as f64,  // z
+        ];
+
         // Compute projected gravity based on mode
         let proj_grav = if self.use_projected_gravity {
             // Mode 1: Quaternion-based projected gravity (clean, no dynamic accelerations)
-            // Read quaternion from IMU's sensor fusion (IMU mode)
-            let quat_mint = self.imu.quaternion()
-                .map_err(|e| anyhow::anyhow!("Failed to read quaternion: {:?}", e))?;
-
-            // Convert mint::Quaternion to [w, x, y, z] array
-            let quat = [
-                quat_mint.s as f64,    // w (scalar part)
-                quat_mint.v.x as f64,  // x (vector part)
-                quat_mint.v.y as f64,  // y
-                quat_mint.v.z as f64,  // z
-            ];
-
             // Compute projected gravity by rotating world-frame gravity into body frame
             // World gravity: [0, 0, -1.0] unit vector pointing downward
             // Use inverse rotation to transform from world frame to body frame
@@ -407,6 +410,7 @@ impl ImuController {
         Ok(ImuData {
             gyro: gyro_rad_s,
             accel: accel_filtered,
+            quat,
         })
     }
 
@@ -738,7 +742,7 @@ impl Bno08xController {
         self.accel_history[0] = self.accel_history[1];
         self.accel_history[1] = accel_final;
 
-        Ok(ImuData { gyro: gyro_filtered, accel: accel_filtered })
+        Ok(ImuData { gyro: gyro_filtered, accel: accel_filtered, quat: last_quat })
     }
 }
 
@@ -840,7 +844,7 @@ impl Bmi088Controller {
         self.accel_history[0] = self.accel_history[1];
         self.accel_history[1] = accel_final;
 
-        Ok(ImuData { gyro: gyro_filtered, accel: accel_filtered })
+        Ok(ImuData { gyro: gyro_filtered, accel: accel_filtered, quat })
     }
 }
 

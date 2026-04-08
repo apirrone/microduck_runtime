@@ -1,0 +1,13 @@
+{
+    "configuration": "default",
+    "documentId": "804927696f06d877f3f1803e",
+    "documentMicroversion": "ba0ed9dc7d8b093cec2e9a4e",
+    "elementId": "c1085f5be782740f05cd18b2",
+    "fullConfiguration": "default",
+    "id": "MbQFoo55+sLIkygdu",
+    "isStandardContent": false,
+    "name": "PCB, Raspberry Pi Zero 2 W <1>",
+    "partId": "KF7G",
+    "suppressed": false,
+    "type": "Part"
+}

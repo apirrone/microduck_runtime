@@ -235,6 +235,15 @@ struct Args {
     /// Smoothing factor for legs low-pass filter (0.0=frozen, 1.0=no filtering). Default: 0.3
     #[arg(long, default_value_t = 0.3)]
     legs_low_pass_alpha: f64,
+
+    /// Stream robot state (joint angles + IMU quaternion) over TCP for digital twin visualization.
+    /// Sends [qw, qx, qy, qz, j0..j14] as 19 × f32 LE (76 bytes/frame) at control loop frequency.
+    #[arg(long)]
+    stream: bool,
+
+    /// TCP port for digital twin streaming (default: 9870)
+    #[arg(long, default_value_t = 9870)]
+    stream_port: u16,
 }
 
 
@@ -313,6 +322,9 @@ struct Runtime {
     legs_low_pass: bool,
     legs_low_pass_alpha: f64,
     legs_low_pass_prev: [f64; 10],  // previous filtered targets for left leg (0-4) and right leg (10-14)
+    // Digital twin TCP stream
+    stream_listener: Option<std::net::TcpListener>,
+    stream_client: Option<std::net::TcpStream>,
 }
 
 impl Runtime {
@@ -544,6 +556,18 @@ impl Runtime {
                 let p = DEFAULT_POSITION;
                 [p[0], p[1], p[2], p[3], p[4], p[10], p[11], p[12], p[13], p[14]]
             },
+            stream_listener: if args.stream {
+                let addr = format!("0.0.0.0:{}", args.stream_port);
+                let listener = std::net::TcpListener::bind(&addr)
+                    .with_context(|| format!("Failed to bind stream listener on {}", addr))?;
+                listener.set_nonblocking(true)
+                    .context("Failed to set stream listener non-blocking")?;
+                println!("Digital twin stream listening on TCP port {}", args.stream_port);
+                Some(listener)
+            } else {
+                None
+            },
+            stream_client: None,
         })
     }
 
@@ -838,6 +862,51 @@ impl Runtime {
         // Read motor state
         let motor_state = self.motor_controller.read_state()
             .context("Failed to read motor state")?;
+
+        // Digital twin streaming: send [qw, qx, qy, qz, j0..j14] as 19 × f32 LE
+        if self.stream_listener.is_some() {
+            // Accept a new client if we don't have one
+            if self.stream_client.is_none() {
+                if let Some(listener) = &self.stream_listener {
+                    if let Ok((stream, addr)) = listener.accept() {
+                        let _ = stream.set_nonblocking(true);
+                        let _ = stream.set_nodelay(true);
+                        println!("Digital twin client connected: {}", addr);
+                        self.stream_client = Some(stream);
+                    }
+                }
+            }
+            // Send packet to connected client
+            if let Some(client) = &mut self.stream_client {
+                let q = imu_data.quat;
+                let mut buf = [0u8; 19 * 4];
+                let floats: [f32; 19] = [
+                    q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32,
+                    motor_state.positions[0] as f32,
+                    motor_state.positions[1] as f32,
+                    motor_state.positions[2] as f32,
+                    motor_state.positions[3] as f32,
+                    motor_state.positions[4] as f32,
+                    motor_state.positions[5] as f32,
+                    motor_state.positions[6] as f32,
+                    motor_state.positions[7] as f32,
+                    motor_state.positions[8] as f32,
+                    motor_state.positions[9] as f32,
+                    motor_state.positions[10] as f32,
+                    motor_state.positions[11] as f32,
+                    motor_state.positions[12] as f32,
+                    motor_state.positions[13] as f32,
+                    motor_state.positions[14] as f32,
+                ];
+                for (i, f) in floats.iter().enumerate() {
+                    buf[i*4..(i+1)*4].copy_from_slice(&f.to_le_bytes());
+                }
+                if client.write_all(&buf).is_err() {
+                    println!("Digital twin client disconnected");
+                    self.stream_client = None;
+                }
+            }
+        }
 
         // Current estimation: accumulate running stats at every control step
         if self.estimate_current {

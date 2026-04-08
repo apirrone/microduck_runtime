@@ -1,0 +1,354 @@
+<?xml version="1.0" ?>
+<!-- Generated using onshape-to-robot -->
+<!-- Onshape https://cad.onshape.com/documents/804927696f06d877f3f1803e/w/3df6f6a8dcea50fb5658e3c0/e/e9ad89ea0c0270c6f03a5522 -->
+<mujoco model="microduck">
+  <compiler angle="radian" meshdir="assets" autolimits="true"/>
+  <default>
+    <default class="microduck">
+      <joint frictionloss="0.1" armature="0.005"/>
+      <position kp="50" dampratio="1"/>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+      </default>
+      <default class="collision">
+        <geom group="3"/>
+      </default>
+    </default>
+  </default>
+  <!-- Additional joints_properties.xml -->
+  <default>
+    <default class="perfect_actuator">
+      <geom contype="0" conaffinity="0"/>
+      <joint damping="0.15" frictionloss="0.1" armature="0.001"/>
+      <position kp="10.0" kv="0.1" forcerange="-20.0 20.0"/>
+    </default>
+    <default class="chosen_actuator_old">
+      <geom contype="0" conaffinity="0"/>
+      <joint damping="0.048" frictionloss="0.006" armature="0.002"/>
+      <position kp="0.52" kv="0.0" forcerange="-0.91 0.91" ctrlrange="-10.0 10.0"/>
+    </default>
+    <default class="chosen_actuator_new">
+      <!-- removing contaminated data -->
+      <geom contype="0" conaffinity="0"/>
+      <joint damping="0.041" frictionloss="0.032" armature="0.002"/>
+      <position kp="0.386" kv="0.0" forcerange="-0.67 0.67" ctrlrange="-10.0 10.0"/>
+    </default>
+    <default class="chosen_actuator">
+      <!-- newest -->
+      <!-- new bam data, m1, fixed 2.5ohm -->
+      <geom contype="0" conaffinity="0"/>
+      <joint damping="0.044" frictionloss="0.013" armature="0.0017"/>
+      <position kp="0.43" kv="0.0" forcerange="-0.75 0.75" ctrlrange="-10.0 10.0"/>
+    </default>
+    <default class="passive_wheel">
+      <geom contype="0" conaffinity="0"/>
+      <joint damping="0.0" frictionloss="0.0" armature="0.0001"/>
+    </default>
+  </default>
+  <!-- Additional sensors.xml -->
+  <sensor>
+    <framequat name="orientation" objtype="site" noise="0.001" objname="imu"/>
+    <gyro name="angular-velocity" site="imu" noise="0.005"/>
+    <gyro name="imu_ang_vel" site="imu"/>
+    <velocimeter name="imu_lin_vel" site="imu"/>
+    <accelerometer name="imu_accel" site="imu"/>
+    <subtreeangmom name="root_angmom" body="trunk_base"/>
+  </sensor>
+  <!-- Additional additional.xml -->
+  <default>
+    <default class="self_collision_only">
+      <geom group="3" contype="2" conaffinity="2"/>
+    </default>
+    <equality solref="0.002 1" solimp="0.99 0.999 0.0005 0.5 2"/>
+  </default>
+  <worldbody>
+    <!-- Link trunk_base -->
+    <body name="trunk_base" pos="0 0 0.12" quat="1 0 0 0" childclass="microduck">
+      <freejoint name="trunk_base_freejoint"/>
+      <inertial pos="-0.0129858 -1.87297e-05 0.0210875" mass="0.26946" fullinertia="0.000253168 0.000342586 0.000212853 1.94331e-07 -4.04508e-05 1.06182e-07"/>
+      <!-- Part electronics_hub -->
+      <geom type="mesh" class="visual" pos="0.0125202 0 0.0352" quat="1 -0 0 0" mesh="electronics_hub" material="electronics_hub_material"/>
+      <!-- Part elec_rpi_robot_hat_pcb -->
+      <geom type="mesh" class="visual" pos="-0.0115748 0.029005 0.06442" quat="0.707107 0 0 -0.707107" mesh="elec_rpi_robot_hat_pcb" material="elec_rpi_robot_hat_pcb_material"/>
+      <!-- Part xl330 -->
+      <geom type="mesh" class="visual" pos="0.0125202 -0.02 0.0353" quat="0 -0.707107 0 -0.707107" mesh="xl330" material="xl330_material"/>
+      <!-- Part bearing -->
+      <geom type="mesh" class="visual" pos="0.0125202 -0.04 0.0352" quat="1 0 0 0" mesh="bearing" material="bearing_material"/>
+      <!-- Part trunk_yaw -->
+      <geom type="mesh" class="visual" pos="0.0125202 0 0.0352" quat="1 -0 0 -0" mesh="trunk_yaw" material="trunk_yaw_material"/>
+      <!-- Part xl330_2 -->
+      <geom type="mesh" class="visual" pos="0.0125202 0.02 0.0353" quat="0 -0.707107 -0 -0.707107" mesh="xl330" material="xl330_material"/>
+      <!-- Part pcb__raspberry_pi_zero_2_w -->
+      <geom type="mesh" class="visual" pos="-0.0230798 0 0.05629" quat="0.5 -0.5 -0.5 0.5" mesh="pcb__raspberry_pi_zero_2_w" material="pcb__raspberry_pi_zero_2_w_material"/>
+      <!-- Part xl330_3 -->
+      <geom type="mesh" class="visual" pos="0.0375202 0.0001 0.0552" quat="0.707107 0 -0 0.707107" mesh="xl330" material="xl330_material"/>
+      <!-- Part bearing_2 -->
+      <geom type="mesh" class="visual" pos="0.0125202 -0 0.0352" quat="1 0 0 -0" mesh="bearing" material="bearing_material"/>
+      <!-- Part np_f970 -->
+      <geom type="mesh" class="visual" pos="-0.0337298 0 0.00875" quat="0 0.707107 -0.707107 -0" mesh="np_f970" material="np_f970_material"/>
+      <!-- Part trunk_base -->
+      <geom type="mesh" class="visual" pos="0.0125202 0 0.0352" quat="1 0 0 0" mesh="trunk_base" material="trunk_base_material"/>
+      <!-- Part part_38 -->
+      <geom type="mesh" class="visual" pos="0.0125202 0 0.0352" quat="1 -0 0 0" mesh="part_38" material="part_38_material"/>
+      <!-- Frame imu -->
+      <site group="3" name="imu" pos="-0.0162825 0.00812245 0.06526" quat="1 0 0 -0"/>
+      <!-- Frame torso_camera -->
+      <site group="3" name="torso_camera" pos="0.0506202 -0 0.0305024" quat="1 -0 -0 -0"/>
+      <camera name="torso_camera" pos="0.0506202 -0 0.0305024" quat="0.5 0.5 -0.5 -0.5"/>
+      <!-- Link roll_motor_bottom -->
+      <body name="roll_motor_bottom" pos="0.0125202 0.02 0.0208" quat="0 0.707107 -0.707107 -0">
+        <!-- Joint from trunk_base to roll_motor_bottom -->
+        <joint axis="0 0 1" name="left_hip_yaw" type="hinge" range="-0.5235987755982988 0.5235987755982988" class="chosen_actuator"/>
+        <inertial pos="0 -0.000243808 0.0205921" mass="0.0250187" fullinertia="5.56855e-06 5.01807e-06 2.44472e-06 0 -0 -1.8994e-08"/>
+        <!-- Part roll_motor_bottom -->
+        <geom type="mesh" class="visual" pos="0.02 -5e-05 -0.0146" quat="0 -0.707107 0.707107 0" mesh="roll_motor_bottom" material="roll_motor_bottom_material"/>
+        <!-- Part roll_motor_top -->
+        <geom type="mesh" class="visual" pos="0.02 0 -0.0146" quat="0 0.707107 -0.707107 -0" mesh="roll_motor_top" material="roll_motor_top_material"/>
+        <!-- Part xl330_4 -->
+        <geom type="mesh" class="visual" pos="0 -5e-05 0.0286" quat="0.707107 0 -0 0.707107" mesh="xl330" material="xl330_material"/>
+        <!-- Link left_roll_to_pitch -->
+        <body name="left_roll_to_pitch" pos="0 -0.01455 0.0286" quat="0 0 -0.707107 0.707107">
+          <!-- Joint from roll_motor_bottom to left_roll_to_pitch -->
+          <joint axis="0 0 1" name="left_hip_roll" type="hinge" range="-0.6981317007977362 0.6981317007977274" class="chosen_actuator"/>
+          <inertial pos="0.0359029 0.00016252 -0.0142127" mass="0.02709" fullinertia="4.61259e-06 7.88911e-06 5.4019e-06 7.4483e-08 4.8292e-08 1.1887e-08"/>
+          <!-- Part left_roll_to_pitch -->
+          <geom type="mesh" class="visual" pos="-0.02 0.0432 -0.0145" quat="0.5 -0.5 -0.5 -0.5" mesh="left_roll_to_pitch" material="left_roll_to_pitch_material"/>
+          <!-- Part xl330_5 -->
+          <geom type="mesh" class="visual" pos="0.0399 -0 -0.0245" quat="0 0 1 0" mesh="xl330" material="xl330_material"/>
+          <!-- Link leg_plate -->
+          <body name="leg_plate" pos="0.0544 -0 -0.0245" quat="0.5 0.5 0.5 0.5">
+            <!-- Joint from left_roll_to_pitch to leg_plate -->
+            <joint axis="0 0 1" name="left_hip_pitch" type="hinge" range="-0.0 1.5707963267948966" class="chosen_actuator"/>
+            <inertial pos="-0.0298612 -0 -0.0142503" mass="0.0242215" fullinertia="3.15074e-06 6.26416e-06 5.11862e-06 0 2.0772e-08 -0"/>
+            <!-- Part spacer -->
+            <geom type="mesh" class="visual" pos="0.0432 -0.0107 -0.0747" quat="0.5 0.5 0.5 0.5" mesh="spacer" material="spacer_material"/>
+            <!-- Part leg_plate -->
+            <geom type="mesh" class="visual" pos="0.0432 -0.01 0.0455" quat="0.5 -0.5 0.5 -0.5" mesh="leg_plate" material="leg_plate_material"/>
+            <!-- Part leg_plate_2 -->
+            <geom type="mesh" class="visual" pos="0.0432 0.01 -0.0745" quat="0.5 0.5 0.5 0.5" mesh="leg_plate" material="leg_plate_material"/>
+            <!-- Part spacer_2 -->
+            <geom type="mesh" class="visual" pos="0.0432 0.01 -0.0747" quat="0.5 0.5 0.5 0.5" mesh="spacer" material="spacer_material"/>
+            <!-- Part xl330_6 -->
+            <geom type="mesh" class="visual" pos="-0.042 -0 -0.0145" quat="0 0.707107 -0 -0.707107" mesh="xl330" material="xl330_material"/>
+            <!-- Link leg_plate_2 -->
+            <body name="leg_plate_2" pos="-0.042 -0 -0" quat="0.707107 -0 -0 -0.707107">
+              <!-- Joint from leg_plate to leg_plate_2 -->
+              <joint axis="0 0 1" name="left_knee" type="hinge" range="-1.9198621771937625 -0.0" class="chosen_actuator"/>
+              <inertial pos="0 -0.0305003 -0.0142358" mass="0.02326" fullinertia="5.9943e-06 3.01723e-06 4.77213e-06 -0 0 1.5359e-08"/>
+              <!-- Part leg_plate_3 -->
+              <geom type="mesh" class="visual" pos="-0.01 0.0432 -0.0745" quat="0 -0 0.707107 0.707107" mesh="leg_plate" material="leg_plate_material"/>
+              <!-- Part leg_plate_4 -->
+              <geom type="mesh" class="visual" pos="0.01 0.0432 0.0455" quat="0.707107 -0.707107 -0 -0" mesh="leg_plate" material="leg_plate_material"/>
+              <!-- Part xl330_7 -->
+              <geom type="mesh" class="visual" pos="0 -0.042 -0.0145" quat="0.5 0.5 0.5 -0.5" mesh="xl330" material="xl330_material"/>
+              <!-- Link foot -->
+              <body name="foot" pos="-0 -0.042 0" quat="0 0 -0 -1">
+                <!-- Joint from leg_plate_2 to foot -->
+                <joint axis="0 0 1" name="left_ankle" type="hinge" range="-1.5707963267948974 1.5707963267948957" class="chosen_actuator"/>
+                <inertial pos="0.00475687 0.0144058 -0.0145" mass="0.01474" fullinertia="2.49961e-06 5.27084e-06 3.79703e-06 -7.3107e-08 -1.8e-11 -6e-12"/>
+                <!-- Part foot -->
+                <geom type="mesh" class="visual" pos="0.01 -0.1272 -0.0745" quat="0.707107 0.707107 0 -0" mesh="foot" material="foot_material"/>
+                <!-- Part foot_tpu_bottom -->
+                <geom type="mesh" class="visual" pos="0.01 -0.1272 -0.0745" quat="0.707107 0.707107 0 0" mesh="foot_tpu_bottom" material="foot_tpu_bottom_material"/>
+                <geom type="mesh" name="left_foot_collision" class="collision" pos="0.01 -0.1272 -0.0745" quat="0.707107 0.707107 0 0" mesh="foot_tpu_bottom" material="foot_tpu_bottom_material"/>
+                <!-- Frame left_foot -->
+                <site group="3" name="left_foot" pos="0.0048 0.021 -0.0145" quat="0.707107 0.707107 0 0"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <!-- Link long_neck_plate2 -->
+      <body name="long_neck_plate2" pos="0.0375202 0.0146 0.0552" quat="0 -0 0.707107 0.707107">
+        <!-- Joint from trunk_base to long_neck_plate2 -->
+        <joint axis="0 0 1" name="neck_pitch" type="hinge" range="-1.2217304763960315 2.0943951023931944" class="chosen_actuator"/>
+        <inertial pos="-0.000824585 0.0446498 -0.0147264" mass="0.02714" fullinertia="9.79961e-06 3.73927e-06 8.13706e-06 -4.41738e-07 5.066e-09 3.9016e-08"/>
+        <!-- Part long_neck_plate1 -->
+        <geom type="mesh" class="visual" pos="0.025 -0.02 -0.0145" quat="0 0 -0.707107 -0.707107" mesh="long_neck_plate1" material="long_neck_plate1_material"/>
+        <!-- Part neck_reinforcement -->
+        <geom type="mesh" class="visual" pos="0.025 -0.02 -0.0145" quat="0 -0 0.707107 0.707107" mesh="neck_reinforcement" material="neck_reinforcement_material"/>
+        <!-- Part long_neck_plate2 -->
+        <geom type="mesh" class="visual" pos="0.025 -0.02 -0.0145" quat="0 0 0.707107 0.707107" mesh="long_neck_plate2" material="long_neck_plate2_material"/>
+        <!-- Part xl330_8 -->
+        <geom type="mesh" class="visual" pos="0 0.06 -0.0145" quat="0.5 -0.5 -0.5 -0.5" mesh="xl330" material="xl330_material"/>
+        <!-- Link head_pitch_to_yaw -->
+        <body name="head_pitch_to_yaw" pos="0 0.06 -0" quat="1 -0 -0 0">
+          <!-- Joint from long_neck_plate2 to head_pitch_to_yaw -->
+          <joint axis="0 0 1" name="head_pitch" type="hinge" range="-1.221730476396044 1.2217304763960173" class="chosen_actuator"/>
+          <inertial pos="0.00600297 0.0210515 -0.0145" mass="0.00677" fullinertia="2.34968e-06 1.22553e-06 2.0015e-06 -3.37269e-07 -0 0"/>
+          <!-- Part head_pitch_to_yaw -->
+          <geom type="mesh" class="visual" pos="0.025 -0.08 -0.0145" quat="0 0 0.707107 0.707107" mesh="head_pitch_to_yaw" material="head_pitch_to_yaw_material"/>
+          <!-- Link head_yaw_to_roll -->
+          <body name="head_yaw_to_roll" pos="0 0.0465 -0.0145" quat="0 -0 -0.707107 0.707107">
+            <!-- Joint from head_pitch_to_yaw to head_yaw_to_roll -->
+            <joint axis="0 0 1" name="head_yaw" type="hinge" range="-2.6179938779914953 2.6179938779914935" class="chosen_actuator"/>
+            <inertial pos="0.00602348 0 0.0174917" mass="0.02914" fullinertia="4.9702e-06 1.03439e-05 1.03996e-05 0 6.69253e-07 0"/>
+            <!-- Part head_yaw_to_roll -->
+            <geom type="mesh" class="visual" pos="-0.025 0 0.1265" quat="0 1 -0 -0" mesh="head_yaw_to_roll" material="head_yaw_to_roll_material"/>
+            <!-- Part xl330_9 -->
+            <geom type="mesh" class="visual" pos="0 0 0.0145" quat="0 0.707107 -0 -0.707107" mesh="xl330" material="xl330_material"/>
+            <!-- Link head_base_plate -->
+            <body name="head_base_plate" pos="0.0305 -0 0.0145" quat="0.5 -0.5 0.5 -0.5">
+              <!-- Joint from head_yaw_to_roll to head_base_plate -->
+              <joint axis="0 0 1" name="head_roll" type="hinge" range="-0.523598775598329 0.5235987755982686" class="chosen_actuator"/>
+              <inertial pos="0.00140986 -0.00204907 -0.0254714" mass="0.11807" fullinertia="0.000259694 0.000285092 7.12026e-05 -1.74595e-07 -6.40852e-06 9.72161e-06"/>
+              <!-- Part crossmember -->
+              <geom type="mesh" class="visual" pos="-0 -0.112 -0.0556" quat="0.5 -0.5 -0.5 -0.5" mesh="crossmember" material="crossmember_material"/>
+              <!-- Part camshaft -->
+              <geom type="mesh" class="visual" pos="-0 -0.112 -0.0556" quat="0.5 -0.5 -0.5 -0.5" mesh="camshaft" material="camshaft_material"/>
+              <!-- Part xl330_10 -->
+              <geom type="mesh" class="visual" pos="-0 0.009 -0.0791" quat="0 0 0.707107 0.707107" mesh="xl330" material="xl330_material"/>
+              <!-- Part xl330_11 -->
+              <geom type="mesh" class="visual" pos="-0 -0 0.0145" quat="0 0.707107 0 -0.707107" mesh="xl330" material="xl330_material"/>
+              <!-- Part bearing_3 -->
+              <geom type="mesh" class="visual" pos="-0.02 0 -0.1215" quat="0 0.707107 0.707107 0" mesh="bearing" material="bearing_material"/>
+              <!-- Part head_base_plate -->
+              <geom type="mesh" class="visual" pos="-0 -0.112 -0.0556" quat="0.5 -0.5 -0.5 -0.5" mesh="head_base_plate" material="head_base_plate_material"/>
+              <!-- Part mouth -->
+              <geom type="mesh" class="visual" pos="-0 -0.112 -0.0556" quat="0.5 -0.5 -0.5 -0.5" mesh="mouth" material="mouth_material"/>
+              <!-- Part head_top -->
+              <geom type="mesh" class="visual" pos="-0 -0.112 -0.0556" quat="0.5 -0.5 -0.5 -0.5" mesh="head_top" material="head_top_material"/>
+              <!-- Frame head_camera -->
+              <site group="3" name="head_camera" pos="0 0.003 0.0394" quat="0.5 -0.5 -0.5 -0.5"/>
+              <camera name="head_camera" pos="0 0.003 0.0394" quat="0 0 -1 0"/>
+              <!-- Frame mouth_tip -->
+              <site group="3" name="mouth_tip" pos="-0 -0.0175 0.0364" quat="0.5 -0.5 -0.5 -0.5"/>
+            </body>
+          </body>
+        </body>
+      </body>
+      <!-- Link xl330 -->
+      <body name="xl330" pos="0.0125202 -0.02 0.0208" quat="0 -1 -0 -0">
+        <!-- Joint from trunk_base to xl330 -->
+        <joint axis="0 0 1" name="right_hip_yaw" type="hinge" range="-0.5235987755982988 0.5235987755982988" class="chosen_actuator"/>
+        <inertial pos="0.000243808 0 0.0205921" mass="0.0250187" fullinertia="5.01807e-06 5.56855e-06 2.44472e-06 -0 1.8994e-08 -0"/>
+        <!-- Part roll_motor_top_2 -->
+        <geom type="mesh" class="visual" pos="0 0.02 -0.0146" quat="0 1 -0 -0" mesh="roll_motor_top" material="roll_motor_top_material"/>
+        <!-- Part roll_motor_bottom_2 -->
+        <geom type="mesh" class="visual" pos="5e-05 0.02 -0.0146" quat="0 1 0 -0" mesh="roll_motor_bottom" material="roll_motor_bottom_material"/>
+        <!-- Part xl330_12 -->
+        <geom type="mesh" class="visual" pos="5e-05 0 0.0286" quat="0 -0 -0 -1" mesh="xl330" material="xl330_material"/>
+        <!-- Link right_roll_to_pitch -->
+        <body name="right_roll_to_pitch" pos="0.01455 0 0.0286" quat="0.5 -0.5 0.5 -0.5">
+          <!-- Joint from xl330 to right_roll_to_pitch -->
+          <joint axis="0 0 1" name="right_hip_roll" type="hinge" range="-0.6981317007977336 0.69813170079773" class="chosen_actuator"/>
+          <inertial pos="-0.0359029 0.00016252 -0.0142127" mass="0.02709" fullinertia="4.61259e-06 7.88911e-06 5.4019e-06 -7.4483e-08 -4.8292e-08 1.1887e-08"/>
+          <!-- Part right_roll_to_pitch -->
+          <geom type="mesh" class="visual" pos="0.02 0.0432 -0.0145" quat="0.5 -0.5 -0.5 -0.5" mesh="right_roll_to_pitch" material="right_roll_to_pitch_material"/>
+          <!-- Part xl330_13 -->
+          <geom type="mesh" class="visual" pos="-0.0399 0 -0.0245" quat="0 1 -0 -0" mesh="xl330" material="xl330_material"/>
+          <!-- Link xl330_2 -->
+          <body name="xl330_2" pos="-0.0544 0 -0.0245" quat="0.5 0.5 -0.5 -0.5">
+            <!-- Joint from right_roll_to_pitch to xl330_2 -->
+            <joint axis="0 0 1" name="right_hip_pitch" type="hinge" range="-1.5707963267948877 8.881784197001252e-15" class="chosen_actuator"/>
+            <inertial pos="0.0305003 -0 -0.0142358" mass="0.02326" fullinertia="3.01723e-06 5.9943e-06 4.77213e-06 0 -1.5359e-08 0"/>
+            <!-- Part xl330_14 -->
+            <geom type="mesh" class="visual" pos="0.042 -0 -0.0145" quat="0.707107 0 0.707107 -0" mesh="xl330" material="xl330_material"/>
+            <!-- Part leg_plate_5 -->
+            <geom type="mesh" class="visual" pos="-0.0432 0.01 0.0455" quat="0.5 -0.5 -0.5 0.5" mesh="leg_plate" material="leg_plate_material"/>
+            <!-- Part leg_plate_6 -->
+            <geom type="mesh" class="visual" pos="-0.0432 -0.01 -0.0745" quat="0.5 0.5 -0.5 -0.5" mesh="leg_plate" material="leg_plate_material"/>
+            <!-- Link xl330_3 -->
+            <body name="xl330_3" pos="0.042 -0 -0" quat="0.707107 0 0 0.707107">
+              <!-- Joint from xl330_2 to xl330_3 -->
+              <joint axis="0 0 1" name="right_knee" type="hinge" range="-5.329070518200751e-15 1.9198621771937572" class="chosen_actuator"/>
+              <inertial pos="-0 -0.0305003 -0.0142358" mass="0.02326" fullinertia="5.9943e-06 3.01723e-06 4.77213e-06 0 0 1.5359e-08"/>
+              <!-- Part xl330_15 -->
+              <geom type="mesh" class="visual" pos="-0 -0.042 -0.0145" quat="0.5 0.5 0.5 -0.5" mesh="xl330" material="xl330_material"/>
+              <!-- Part leg_plate_7 -->
+              <geom type="mesh" class="visual" pos="0.01 0.0432 0.0455" quat="0.707107 -0.707107 0 0" mesh="leg_plate" material="leg_plate_material"/>
+              <!-- Part leg_plate_8 -->
+              <geom type="mesh" class="visual" pos="-0.01 0.0432 -0.0745" quat="0 -0 -0.707107 -0.707107" mesh="leg_plate" material="leg_plate_material"/>
+              <!-- Link foot_2 -->
+              <body name="foot_2" pos="-0 -0.042 -0" quat="1 0 0 -0">
+                <!-- Joint from xl330_3 to foot_2 -->
+                <joint axis="0 0 1" name="right_ankle" type="hinge" range="-1.5707963267948983 1.5707963267948948" class="chosen_actuator"/>
+                <inertial pos="0.00475687 -0.0144058 -0.0145" mass="0.01474" fullinertia="2.49961e-06 5.27084e-06 3.79703e-06 7.3107e-08 1.8e-11 -6e-12"/>
+                <!-- Part foot_tpu_bottom_2 -->
+                <geom type="mesh" class="visual" pos="0.01 0.1272 0.0455" quat="0.707107 -0.707107 -0 -0" mesh="foot_tpu_bottom" material="foot_tpu_bottom_material"/>
+                <geom type="mesh" name="right_foot_collision" class="collision" pos="0.01 0.1272 0.0455" quat="0.707107 -0.707107 -0 -0" mesh="foot_tpu_bottom" material="foot_tpu_bottom_material"/>
+                <!-- Part foot_2 -->
+                <geom type="mesh" class="visual" pos="0.01 0.1272 0.0455" quat="0.707107 -0.707107 0 0" mesh="foot" material="foot_material"/>
+                <!-- Frame right_foot -->
+                <site group="3" name="right_foot" pos="0.0048 -0.021 -0.0145" quat="0.707107 -0.707107 -0 -0"/>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <asset>
+    <mesh file="roll_motor_bottom.stl"/>
+    <mesh file="trunk_yaw.stl"/>
+    <mesh file="spacer.stl"/>
+    <mesh file="long_neck_plate1.stl"/>
+    <mesh file="foot.stl"/>
+    <mesh file="trunk_base.stl"/>
+    <mesh file="bearing.stl"/>
+    <mesh file="mouth.stl"/>
+    <mesh file="head_pitch_to_yaw.stl"/>
+    <mesh file="long_neck_plate2.stl"/>
+    <mesh file="np_f970.stl"/>
+    <mesh file="right_roll_to_pitch.stl"/>
+    <mesh file="roll_motor_top.stl"/>
+    <mesh file="head_yaw_to_roll.stl"/>
+    <mesh file="electronics_hub.stl"/>
+    <mesh file="pcb__raspberry_pi_zero_2_w.stl"/>
+    <mesh file="camshaft.stl"/>
+    <mesh file="part_38.stl"/>
+    <mesh file="crossmember.stl"/>
+    <mesh file="left_roll_to_pitch.stl"/>
+    <mesh file="xl330.stl"/>
+    <mesh file="leg_plate.stl"/>
+    <mesh file="foot_tpu_bottom.stl"/>
+    <mesh file="neck_reinforcement.stl"/>
+    <mesh file="elec_rpi_robot_hat_pcb.stl"/>
+    <mesh file="head_top.stl"/>
+    <mesh file="head_base_plate.stl"/>
+    <material name="electronics_hub_material" rgba="0.615686 0.811765 0.929412 1"/>
+    <material name="elec_rpi_robot_hat_pcb_material" rgba="0.313725 0.486275 0.411765 1"/>
+    <material name="xl330_material" rgba="0.286275 0.286275 0.286275 1"/>
+    <material name="bearing_material" rgba="0.701961 0.701961 0.701961 1"/>
+    <material name="trunk_yaw_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="pcb__raspberry_pi_zero_2_w_material" rgba="0.498039 0.498039 0.498039 1"/>
+    <material name="np_f970_material" rgba="0.301961 0.301961 0.301961 1"/>
+    <material name="trunk_base_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="part_38_material" rgba="0.231373 0.380392 0.705882 1"/>
+    <material name="roll_motor_bottom_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="roll_motor_top_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="left_roll_to_pitch_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="spacer_material" rgba="0.6 0.6 0.6 1"/>
+    <material name="leg_plate_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="foot_material" rgba="1 0.756863 0.054902 1"/>
+    <material name="foot_tpu_bottom_material" rgba="0.262745 0.262745 0.262745 1"/>
+    <material name="long_neck_plate1_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="neck_reinforcement_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="long_neck_plate2_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="head_pitch_to_yaw_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="head_yaw_to_roll_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="crossmember_material" rgba="0.980392 0.713725 0.00392157 1"/>
+    <material name="camshaft_material" rgba="0.878431 0.223529 0.00392157 1"/>
+    <material name="head_base_plate_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="mouth_material" rgba="0.235294 0.235294 0.235294 1"/>
+    <material name="head_top_material" rgba="0.6 0.6 0.6 1"/>
+    <material name="right_roll_to_pitch_material" rgba="0.235294 0.235294 0.235294 1"/>
+  </asset>
+  <actuator>
+    <position class="chosen_actuator" name="left_hip_yaw" joint="left_hip_yaw"/>
+    <position class="chosen_actuator" name="left_hip_roll" joint="left_hip_roll"/>
+    <position class="chosen_actuator" name="left_hip_pitch" joint="left_hip_pitch"/>
+    <position class="chosen_actuator" name="left_knee" joint="left_knee"/>
+    <position class="chosen_actuator" name="left_ankle" joint="left_ankle"/>
+    <position class="chosen_actuator" name="neck_pitch" joint="neck_pitch"/>
+    <position class="chosen_actuator" name="head_pitch" joint="head_pitch"/>
+    <position class="chosen_actuator" name="head_yaw" joint="head_yaw"/>
+    <position class="chosen_actuator" name="head_roll" joint="head_roll"/>
+    <position class="chosen_actuator" name="right_hip_yaw" joint="right_hip_yaw"/>
+    <position class="chosen_actuator" name="right_hip_roll" joint="right_hip_roll"/>
+    <position class="chosen_actuator" name="right_hip_pitch" joint="right_hip_pitch"/>
+    <position class="chosen_actuator" name="right_knee" joint="right_knee"/>
+    <position class="chosen_actuator" name="right_ankle" joint="right_ankle"/>
+  </actuator>
+  <equality/>
+</mujoco>
