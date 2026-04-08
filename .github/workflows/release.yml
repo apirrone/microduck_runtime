@@ -65,8 +65,8 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/check_voltage dist/
           cp target/aarch64-unknown-linux-gnu/release/microduck_help dist/
           cp target/aarch64-unknown-linux-gnu/release/debug_bno08x dist/
-          # Copy policies
-          cp -r policies dist/
+          # Copy policies (preserving symlinks)
+          cp -a policies dist/
           # Copy systemd service file
           cp rpi_setup/microduck_runtime.service dist/
           # Copy ONNX Runtime library (preserving symlinks)
