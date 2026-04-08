@@ -147,7 +147,19 @@ class MicroduckOdometry:
             estimates.append(self._anchor['right'] - R @ pos_right)
 
         if estimates:
-            self._pos = np.mean(estimates, axis=0)
+            xy = np.mean(estimates, axis=0)[:2]
+            self._pos[0] = xy[0]
+            self._pos[1] = xy[1]
+
+        # Z: derive directly from FK on flat ground (avoids arc drift during stance).
+        # For any foot in contact: trunk_z = -(R @ foot_trunk)[2]
+        z_estimates = []
+        if new_left:
+            z_estimates.append(-(R @ pos_left)[2])
+        if new_right:
+            z_estimates.append(-(R @ pos_right)[2])
+        if z_estimates:
+            self._pos[2] = float(np.mean(z_estimates))
 
     @property
     def position(self) -> np.ndarray:

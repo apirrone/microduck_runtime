@@ -95,8 +95,8 @@ def main():
         help="Path to MuJoCo scene XML (default: fk/scene.xml)",
     )
     parser.add_argument(
-        "--odometry-socket", default=None,
-        help="Unix socket path to receive odometry [x,y,z,yaw] from sidecar (optional)",
+        "--odometry", action="store_true",
+        help="Compute odometry locally from the stream data (uses Placo FK)",
     )
     args = parser.parse_args()
 
@@ -128,22 +128,15 @@ def main():
     else:
         freejoint_qpos_adr = model.jnt_qposadr[freejoint_id]
 
-    # Optional non-blocking Unix socket for odometry position
-    odo_sock = None
-    if args.odometry_socket:
-        import socket as _socket
-        rx_path = args.odometry_socket + ".viewer"
-        try:
-            os.remove(rx_path)
-        except OSError:
-            pass
-        odo_sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_DGRAM)
-        odo_sock.bind(rx_path)
-        odo_sock.setblocking(False)
-        print(f"Listening for odometry at {rx_path}", flush=True)
+    # Local odometry (optional) — runs Placo FK+gravity on the received stream data
+    odo = None
+    if args.odometry:
+        from odometry import MicroduckOdometry
+        odo = MicroduckOdometry()
+        print("Local odometry enabled", flush=True)
 
     # Seed position from the model's default qpos so the robot appears at the
-    # correct height before the odometry sidecar connects.
+    # correct height before odometry kicks in.
     if freejoint_qpos_adr is not None:
         odo_pos = list(model.qpos0[freejoint_qpos_adr:freejoint_qpos_adr + 3])
     else:
@@ -162,18 +155,14 @@ def main():
 
             floats = struct.unpack_from(f"<{PACKET_FLOATS}f", raw)
             qw, qx, qy, qz = floats[0], floats[1], floats[2], floats[3]
-            joints = floats[4:19]   # 15 joint angles
-            # floats[19:34] are currents — available if needed
+            joints   = floats[4:19]   # 15 joint angles
+            currents = floats[19:34]  # 15 motor currents (mA)
 
-            # Drain latest odometry datagram (non-blocking)
-            if odo_sock is not None:
-                try:
-                    while True:
-                        pkt = odo_sock.recv(16)
-                        x, y, z, _yaw = struct.unpack("<4f", pkt)
-                        odo_pos[:] = [x, y, z]
-                except BlockingIOError:
-                    pass
+            # Update local odometry if enabled
+            if odo is not None:
+                odo.update(joints, (qw, qx, qy, qz), currents)
+                p = odo.position
+                odo_pos[:] = [p[0], p[1], p[2]]
 
             # Set floating base pose: orientation from IMU, position from odometry
             if freejoint_qpos_adr is not None:
