@@ -214,6 +214,10 @@ struct Args {
     #[arg(long, default_value_t = 0.6)]
     ground_pick_kp_ratio: f64,
 
+    /// kP multiplier applied to all motors when using the standing policy (e.g. 0.6 = 40% reduction)
+    #[arg(long, default_value_t = 0.6)]
+    standing_kp_ratio: f64,
+
     /// Enable 15-DOF mode: mouth_motor is part of the policy (use with new policies trained with mouth).
     /// Without this flag, the runtime runs in 14-DOF legacy mode: mouth is excluded from the policy
     /// observation/action and is controlled directly via the right trigger.
@@ -305,6 +309,7 @@ struct Runtime {
     roller_mode: bool,
     has_standing_policy: bool,
     is_using_standing: bool,
+    standing_kp_ratio: f64,
     standing_prev_action_scale: f64,
     // Emergency stop
     select_held_since: Option<Instant>,
@@ -535,6 +540,7 @@ impl Runtime {
             roller_mode: args.roller,
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
+            standing_kp_ratio: args.standing_kp_ratio,
             standing_prev_action_scale: args.action_scale,
             select_held_since: None,
             battery_benchmark: args.battery_benchmark.is_some(),
@@ -947,10 +953,10 @@ impl Runtime {
                 self.standing_prev_action_scale = self.action_scale;
                 self.action_scale = 1.0;
                 let (kp, ki, kd) = self.pid_gains;
-                let standing_kp = (kp as f64 * 0.6).round() as u16;
+                let standing_kp = (kp as f64 * self.standing_kp_ratio).round() as u16;
                 self.motor_controller.set_pid_gains(standing_kp, ki, kd)
                     .context("Failed to set standing PID gains")?;
-                println!("^ Standing mode: kP={} -> {} (60%), action_scale=1.0", kp, standing_kp);
+                println!("^ Standing mode: kP={} -> {} ({:.0}%), action_scale=1.0", kp, standing_kp, self.standing_kp_ratio * 100.0);
             } else if !will_stand && self.is_using_standing {
                 self.is_using_standing = false;
                 self.action_scale = self.standing_prev_action_scale;
@@ -1086,7 +1092,7 @@ impl Runtime {
                 if self.is_using_standing {
                     // Return to standing mode: re-apply 60% kP (transition won't fire since
                     // is_using_standing is already true, so we must restore it explicitly)
-                    let standing_kp = (kp as f64 * 0.6).round() as u16;
+                    let standing_kp = (kp as f64 * self.standing_kp_ratio).round() as u16;
                     self.motor_controller.set_pid_gains(standing_kp, ki, kd)
                         .context("Failed to restore standing PID gains after ground pick")?;
                     println!("▲ Ground pick: done, returning to standing (action_scale={:.2}, kP={})", self.action_scale, standing_kp);
