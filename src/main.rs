@@ -227,6 +227,14 @@ struct Args {
     /// Smoothing factor for head low-pass filter (0.0=frozen, 1.0=no filtering). Default: 0.3
     #[arg(long, default_value_t = 0.3)]
     head_low_pass_alpha: f64,
+
+    /// Apply a low-pass filter to leg joint commands to reduce oscillation
+    #[arg(long)]
+    legs_low_pass: bool,
+
+    /// Smoothing factor for legs low-pass filter (0.0=frozen, 1.0=no filtering). Default: 0.3
+    #[arg(long, default_value_t = 0.3)]
+    legs_low_pass_alpha: f64,
 }
 
 
@@ -301,6 +309,10 @@ struct Runtime {
     head_low_pass: bool,
     head_low_pass_alpha: f64,
     head_low_pass_prev: [f64; 4],  // previous filtered targets for indices 5-8
+    // Legs low-pass filter
+    legs_low_pass: bool,
+    legs_low_pass_alpha: f64,
+    legs_low_pass_prev: [f64; 10],  // previous filtered targets for left leg (0-4) and right leg (10-14)
 }
 
 impl Runtime {
@@ -525,6 +537,12 @@ impl Runtime {
                 p[5] = args.neck_pitch_default;
                 p[6] = args.head_pitch_default;
                 [p[5], p[6], p[7], p[8]]
+            },
+            legs_low_pass: args.legs_low_pass,
+            legs_low_pass_alpha: args.legs_low_pass_alpha,
+            legs_low_pass_prev: {
+                let p = DEFAULT_POSITION;
+                [p[0], p[1], p[2], p[3], p[4], p[10], p[11], p[12], p[13], p[14]]
             },
         })
     }
@@ -925,6 +943,21 @@ impl Runtime {
                 let filtered = alpha * motor_targets[5 + i] + (1.0 - alpha) * self.head_low_pass_prev[i];
                 self.head_low_pass_prev[i] = filtered;
                 motor_targets[5 + i] = filtered;
+            }
+        }
+
+        // Low-pass filter for leg joints (left: 0-4, right: 10-14)
+        if self.legs_low_pass {
+            let alpha = self.legs_low_pass_alpha;
+            for i in 0..5 {
+                let filtered = alpha * motor_targets[i] + (1.0 - alpha) * self.legs_low_pass_prev[i];
+                self.legs_low_pass_prev[i] = filtered;
+                motor_targets[i] = filtered;
+            }
+            for i in 0..5 {
+                let filtered = alpha * motor_targets[10 + i] + (1.0 - alpha) * self.legs_low_pass_prev[5 + i];
+                self.legs_low_pass_prev[5 + i] = filtered;
+                motor_targets[10 + i] = filtered;
             }
         }
 
