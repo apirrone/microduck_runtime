@@ -68,6 +68,7 @@
     - interface
         - enable i2c
         - disable serial console, enable serial port
+- run `sudo nmcli con mod <tab_to_find> wifi.powersave disable` to fix annoying ssh hangs
 - `sudo reboot 0`
 - `curl -sSL https://raw.githubusercontent.com/apirrone/microduck_runtime/main/install.sh | bash`
 
