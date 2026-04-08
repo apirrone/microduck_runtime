@@ -56,8 +56,12 @@ class MicroduckOdometry:
         self._kt = kt
         self._friction = friction
 
-        # World-frame trunk position [x, y, z]
-        self._pos = np.zeros(3)
+        # World-frame trunk position [x, y, z].
+        # Seed z from FK at neutral pose: assume feet start on flat ground (world z=0),
+        # so trunk z ≈ -foot_z_in_trunk_frame (at identity rotation).
+        self._fk.update([0.0] * 15)
+        foot_z_neutral = self._fk.get_pose('left_foot')[2, 3]
+        self._pos = np.array([0.0, 0.0, -foot_z_neutral])
         # Last IMU quaternion [w, x, y, z]
         self._quat = np.array([1.0, 0.0, 0.0, 0.0])
 

@@ -142,7 +142,12 @@ def main():
         odo_sock.setblocking(False)
         print(f"Listening for odometry at {rx_path}", flush=True)
 
-    odo_pos = [0.0, 0.0, 0.0]  # latest x, y, z from odometry sidecar
+    # Seed position from the model's default qpos so the robot appears at the
+    # correct height before the odometry sidecar connects.
+    if freejoint_qpos_adr is not None:
+        odo_pos = list(model.qpos0[freejoint_qpos_adr:freejoint_qpos_adr + 3])
+    else:
+        odo_pos = [0.0, 0.0, 0.0]
 
     sock = connect(args.host, args.port)
 
