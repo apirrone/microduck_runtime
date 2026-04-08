@@ -20,7 +20,7 @@ import mujoco.viewer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-PACKET_FLOATS = 19          # 4 quat + 15 joints
+PACKET_FLOATS = 34          # 4 quat + 15 joints + 15 currents
 PACKET_BYTES  = PACKET_FLOATS * 4
 
 
@@ -94,6 +94,10 @@ def main():
         default=os.path.join(_HERE, "scene.xml"),
         help="Path to MuJoCo scene XML (default: fk/scene.xml)",
     )
+    parser.add_argument(
+        "--odometry-socket", default=None,
+        help="Unix socket path to receive odometry [x,y,z,yaw] from sidecar (optional)",
+    )
     args = parser.parse_args()
 
     # Load model (scene XML for nicer visuals with floor, lighting, etc.)
@@ -124,6 +128,22 @@ def main():
     else:
         freejoint_qpos_adr = model.jnt_qposadr[freejoint_id]
 
+    # Optional non-blocking Unix socket for odometry position
+    odo_sock = None
+    if args.odometry_socket:
+        import socket as _socket
+        rx_path = args.odometry_socket + ".viewer"
+        try:
+            os.remove(rx_path)
+        except OSError:
+            pass
+        odo_sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_DGRAM)
+        odo_sock.bind(rx_path)
+        odo_sock.setblocking(False)
+        print(f"Listening for odometry at {rx_path}", flush=True)
+
+    odo_pos = [0.0, 0.0, 0.0]  # latest x, y, z from odometry sidecar
+
     sock = connect(args.host, args.port)
 
     with mujoco.viewer.launch_passive(model, data) as v:
@@ -137,11 +157,25 @@ def main():
 
             floats = struct.unpack_from(f"<{PACKET_FLOATS}f", raw)
             qw, qx, qy, qz = floats[0], floats[1], floats[2], floats[3]
-            joints = floats[4:]  # 15 values
+            joints = floats[4:19]   # 15 joint angles
+            # floats[19:34] are currents — available if needed
 
-            # Set floating base orientation (position stays at origin for now)
+            # Drain latest odometry datagram (non-blocking)
+            if odo_sock is not None:
+                try:
+                    while True:
+                        pkt = odo_sock.recv(16)
+                        x, y, z, _yaw = struct.unpack("<4f", pkt)
+                        odo_pos[:] = [x, y, z]
+                except BlockingIOError:
+                    pass
+
+            # Set floating base pose: orientation from IMU, position from odometry
             if freejoint_qpos_adr is not None:
                 # freejoint qpos layout: [x, y, z, qw, qx, qy, qz]
+                data.qpos[freejoint_qpos_adr + 0] = odo_pos[0]
+                data.qpos[freejoint_qpos_adr + 1] = odo_pos[1]
+                data.qpos[freejoint_qpos_adr + 2] = odo_pos[2]
                 data.qpos[freejoint_qpos_adr + 3] = qw
                 data.qpos[freejoint_qpos_adr + 4] = qx
                 data.qpos[freejoint_qpos_adr + 5] = qy

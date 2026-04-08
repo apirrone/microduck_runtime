@@ -248,6 +248,11 @@ struct Args {
     /// TCP port for digital twin streaming (default: 9870)
     #[arg(long, default_value_t = 9870)]
     stream_port: u16,
+
+    /// Unix socket path to receive odometry [x, y, z, yaw] as 4×f32 LE from the Python sidecar.
+    /// Default: /tmp/microduck_odometry.sock (used when --stream is active)
+    #[arg(long, default_value = "/tmp/microduck_odometry.sock")]
+    odometry_socket: String,
 }
 
 
@@ -330,6 +335,10 @@ struct Runtime {
     // Digital twin TCP stream
     stream_listener: Option<std::net::TcpListener>,
     stream_client: Option<std::net::TcpStream>,
+    // Odometry: position+yaw received from the Python odometry sidecar via Unix socket
+    odometry_socket: Option<std::os::unix::net::UnixDatagram>,
+    /// Latest odometry estimate [x, y, z, yaw] in world frame (meters / radians)
+    pub odometry: [f64; 4],
 }
 
 impl Runtime {
@@ -574,6 +583,19 @@ impl Runtime {
                 None
             },
             stream_client: None,
+            odometry_socket: if args.stream {
+                // Remove stale socket file if it exists
+                let _ = std::fs::remove_file(&args.odometry_socket);
+                let sock = std::os::unix::net::UnixDatagram::bind(&args.odometry_socket)
+                    .with_context(|| format!("Failed to bind odometry socket {}", args.odometry_socket))?;
+                sock.set_nonblocking(true)
+                    .context("Failed to set odometry socket non-blocking")?;
+                println!("Odometry socket listening at {}", args.odometry_socket);
+                Some(sock)
+            } else {
+                None
+            },
+            odometry: [0.0; 4],
         })
     }
 
@@ -885,9 +907,11 @@ impl Runtime {
             // Send packet to connected client
             if let Some(client) = &mut self.stream_client {
                 let q = imu_data.quat;
-                let mut buf = [0u8; 19 * 4];
-                let floats: [f32; 19] = [
+                let mut buf = [0u8; 34 * 4];
+                let floats: [f32; 34] = [
+                    // [0..3]   IMU quaternion [w, x, y, z]
                     q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32,
+                    // [4..18]  joint positions (runtime motor order)
                     motor_state.positions[0] as f32,
                     motor_state.positions[1] as f32,
                     motor_state.positions[2] as f32,
@@ -903,6 +927,22 @@ impl Runtime {
                     motor_state.positions[12] as f32,
                     motor_state.positions[13] as f32,
                     motor_state.positions[14] as f32,
+                    // [19..33] motor currents in mA (same order)
+                    motor_state.currents_ma[0] as f32,
+                    motor_state.currents_ma[1] as f32,
+                    motor_state.currents_ma[2] as f32,
+                    motor_state.currents_ma[3] as f32,
+                    motor_state.currents_ma[4] as f32,
+                    motor_state.currents_ma[5] as f32,
+                    motor_state.currents_ma[6] as f32,
+                    motor_state.currents_ma[7] as f32,
+                    motor_state.currents_ma[8] as f32,
+                    motor_state.currents_ma[9] as f32,
+                    motor_state.currents_ma[10] as f32,
+                    motor_state.currents_ma[11] as f32,
+                    motor_state.currents_ma[12] as f32,
+                    motor_state.currents_ma[13] as f32,
+                    motor_state.currents_ma[14] as f32,
                 ];
                 for (i, f) in floats.iter().enumerate() {
                     buf[i*4..(i+1)*4].copy_from_slice(&f.to_le_bytes());
@@ -911,6 +951,17 @@ impl Runtime {
                     println!("Digital twin client disconnected");
                     self.stream_client = None;
                 }
+            }
+        }
+
+        // Read latest odometry from Python sidecar (non-blocking, stale value kept if no new data)
+        if let Some(sock) = &self.odometry_socket {
+            let mut buf = [0u8; 16];
+            if sock.recv(&mut buf).is_ok() {
+                self.odometry[0] = f32::from_le_bytes(buf[0..4].try_into().unwrap()) as f64;
+                self.odometry[1] = f32::from_le_bytes(buf[4..8].try_into().unwrap()) as f64;
+                self.odometry[2] = f32::from_le_bytes(buf[8..12].try_into().unwrap()) as f64;
+                self.odometry[3] = f32::from_le_bytes(buf[12..16].try_into().unwrap()) as f64;
             }
         }
 
