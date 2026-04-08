@@ -103,7 +103,7 @@ done
 if [ -d "policies" ]; then
     POLICIES_DIR="$HOME/microduck/policies"
     mkdir -p "$POLICIES_DIR"
-    cp policies/* "$POLICIES_DIR/"
+    cp -r policies/. "$POLICIES_DIR/"
     echo -e "${GREEN}✓ Policies installed to $POLICIES_DIR${NC}"
 fi
 
