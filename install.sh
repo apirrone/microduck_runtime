@@ -107,6 +107,13 @@ if [ -d "policies" ]; then
     echo -e "${GREEN}✓ Policies installed to $POLICIES_DIR${NC}"
 fi
 
+# Install URDF for inline odometry
+if [ -f "robot.urdf" ]; then
+    mkdir -p "$HOME/microduck"
+    cp robot.urdf "$HOME/microduck/robot.urdf"
+    echo -e "${GREEN}✓ URDF installed to $HOME/microduck/robot.urdf${NC}"
+fi
+
 # Install ONNX Runtime library
 ONNX_LIB_DIR="/usr/local/lib"
 if ls libonnxruntime.so* 1> /dev/null 2>&1; then

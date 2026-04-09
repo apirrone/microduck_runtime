@@ -64,3 +64,5 @@ tokio = { version = "1", features = ["rt", "time", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde-pickle = "1.1"
 gilrs = "0.10"
+urdf-rs = "0.9"
+nalgebra = "0.33"

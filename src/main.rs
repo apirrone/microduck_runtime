@@ -3,6 +3,7 @@ mod motor;
 mod observation;
 mod policy;
 mod controller;
+mod odometry;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -249,10 +250,10 @@ struct Args {
     #[arg(long, default_value_t = 9870)]
     stream_port: u16,
 
-    /// Unix socket path to receive odometry [x, y, z, yaw] as 4×f32 LE from the Python sidecar.
-    /// Default: /tmp/microduck_odometry.sock (used when --stream is active)
-    #[arg(long, default_value = "/tmp/microduck_odometry.sock")]
-    odometry_socket: String,
+    /// Path to robot.urdf for inline odometry (used when --stream is active).
+    /// Defaults to ~/microduck/robot.urdf.
+    #[arg(long)]
+    urdf: Option<String>,
 }
 
 
@@ -335,9 +336,9 @@ struct Runtime {
     // Digital twin TCP stream
     stream_listener: Option<std::net::TcpListener>,
     stream_client: Option<std::net::TcpStream>,
-    // Odometry: position+yaw received from the Python odometry sidecar via Unix socket
-    odometry_socket: Option<std::os::unix::net::UnixDatagram>,
-    /// Latest odometry estimate [x, y, z, yaw] in world frame (meters / radians)
+    // Inline odometry engine (None if no URDF provided)
+    odometry_engine: Option<odometry::Odometry>,
+    /// Latest odometry estimate [x, y, z, yaw] in world frame (metres / radians)
     pub odometry: [f64; 4],
 }
 
@@ -583,15 +584,22 @@ impl Runtime {
                 None
             },
             stream_client: None,
-            odometry_socket: if args.stream {
-                // Remove stale socket file if it exists
-                let _ = std::fs::remove_file(&args.odometry_socket);
-                let sock = std::os::unix::net::UnixDatagram::bind(&args.odometry_socket)
-                    .with_context(|| format!("Failed to bind odometry socket {}", args.odometry_socket))?;
-                sock.set_nonblocking(true)
-                    .context("Failed to set odometry socket non-blocking")?;
-                println!("Odometry socket listening at {}", args.odometry_socket);
-                Some(sock)
+            odometry_engine: if args.stream {
+                let path = args.urdf.clone().unwrap_or_else(|| {
+                    std::env::var("HOME")
+                        .map(|h| format!("{}/microduck/robot.urdf", h))
+                        .unwrap_or_else(|_| "robot.urdf".to_string())
+                });
+                match odometry::Odometry::new(&path) {
+                    Ok(odo) => {
+                        println!("Odometry initialized from {}", path);
+                        Some(odo)
+                    }
+                    Err(e) => {
+                        eprintln!("Warning: odometry disabled — could not load URDF '{}': {}", path, e);
+                        None
+                    }
+                }
             } else {
                 None
             },
@@ -954,15 +962,12 @@ impl Runtime {
             }
         }
 
-        // Read latest odometry from Python sidecar (non-blocking, stale value kept if no new data)
-        if let Some(sock) = &self.odometry_socket {
-            let mut buf = [0u8; 16];
-            if sock.recv(&mut buf).is_ok() {
-                self.odometry[0] = f32::from_le_bytes(buf[0..4].try_into().unwrap()) as f64;
-                self.odometry[1] = f32::from_le_bytes(buf[4..8].try_into().unwrap()) as f64;
-                self.odometry[2] = f32::from_le_bytes(buf[8..12].try_into().unwrap()) as f64;
-                self.odometry[3] = f32::from_le_bytes(buf[12..16].try_into().unwrap()) as f64;
-            }
+        // Inline odometry — runs whenever --stream is active and a URDF was loaded
+        if let Some(odo) = &mut self.odometry_engine {
+            let angles: [f64; 15] = std::array::from_fn(|i| motor_state.positions[i]);
+            odo.update(&angles, imu_data.quat);
+            let p = odo.position;
+            self.odometry = [p[0], p[1], p[2], odo.yaw];
         }
 
         // Current estimation: accumulate running stats at every control step

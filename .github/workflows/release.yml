@@ -69,10 +69,12 @@ jobs:
           cp -a policies dist/
           # Copy systemd service file
           cp rpi_setup/microduck_runtime.service dist/
+          # Copy URDF for inline odometry (mesh assets not needed for FK)
+          cp fk/robot.urdf dist/
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw calibrate_imu test_controller init em check_voltage microduck_help debug_bno08x policies microduck_runtime.service libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw calibrate_imu test_controller init em check_voltage microduck_help debug_bno08x policies microduck_runtime.service robot.urdf libonnxruntime.so*
           cd ..
 
       - name: Create Release
