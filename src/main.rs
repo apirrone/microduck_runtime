@@ -195,6 +195,12 @@ struct Args {
     #[arg(long)]
     motorized_wheel: bool,
 
+    /// Invert wheel velocity directions (negate both left and right wheel commands).
+    /// Use this if the robot moves backwards or spins when it should go straight,
+    /// to compensate for physical motor mounting orientation vs. simulation convention.
+    #[arg(long)]
+    invert_wheel: bool,
+
     /// Battery benchmark mode: robot walks on the spot until battery dies.
     /// Ignores controller input, auto-recovers from falls.
     /// Logs start time, elapsed time and current time every second to the given file.
@@ -343,6 +349,7 @@ struct Runtime {
     // Standing policy
     roller_mode: bool,
     motorized_wheel_mode: bool,
+    invert_wheel: bool,
     has_standing_policy: bool,
     is_using_standing: bool,
     standing_kp_ratio: f64,
@@ -611,6 +618,7 @@ impl Runtime {
             current_peak: 0.0,
             roller_mode: args.roller,
             motorized_wheel_mode: args.motorized_wheel,
+            invert_wheel: args.invert_wheel,
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
             standing_kp_ratio: args.standing_kp_ratio,
@@ -692,7 +700,8 @@ impl Runtime {
         if self.motorized_wheel_mode {
             self.motor_controller.set_wheel_motors_velocity_mode()
                 .context("Failed to set wheel motors to velocity mode")?;
-            println!("✓ Wheel motors set to velocity control (Operating Mode 1)");
+            println!("✓ Wheel motors set to velocity control (Operating Mode 1){}",
+                     if self.invert_wheel { " [INVERTED]" } else { "" });
         }
 
         // Smoothly interpolate to default position over 3 seconds
@@ -1276,8 +1285,9 @@ impl Runtime {
 
         if self.motorized_wheel_mode {
             // action_for_targets[WHEEL_MOTOR_INDICES] holds the correct wheel velocities after remap.
-            let left_vel  = action_for_targets[WHEEL_MOTOR_INDICES[0]] as f64 * WHEEL_MAX_VEL;
-            let right_vel = action_for_targets[WHEEL_MOTOR_INDICES[1]] as f64 * WHEEL_MAX_VEL;
+            let sign = if self.invert_wheel { -1.0 } else { 1.0 };
+            let left_vel  = sign * action_for_targets[WHEEL_MOTOR_INDICES[0]] as f64 * WHEEL_MAX_VEL;
+            let right_vel = sign * action_for_targets[WHEEL_MOTOR_INDICES[1]] as f64 * WHEEL_MAX_VEL;
             self.motor_controller.write_wheel_velocities(left_vel, right_vel)
                 .context("Failed to write wheel velocities")?;
             self.motor_controller.write_goal_positions_no_wheels(&motor_targets)
