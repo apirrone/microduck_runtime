@@ -1159,9 +1159,45 @@ impl Runtime {
         } else {
             self.action_scale
         };
+        // For motorized-wheel mode, remap the policy output to the correct motor indices.
+        //
+        // The policy outputs 14 values in this order:
+        //   [0..11] = 12 position joints: left_hip_yaw/roll/pitch/knee, neck_pitch, head_pitch/yaw/roll,
+        //             right_hip_yaw/roll/pitch/knee  (ctrl order skipping wheels at ctrl[4] and ctrl[13])
+        //   [12]    = left_wheel velocity  (ctrl[4])
+        //   [13]    = right_wheel velocity (ctrl[13] in sim = motor index 14 in runtime)
+        //
+        // policy.rs legacy mapping inserts mouth=0 at index 9:
+        //   action[k] = policy[k] for k < 9, action[k+1] = policy[k] for k >= 9.
+        //
+        // So: action[4]=policy[4]=neck_pitch (not left_wheel), action[13]=policy[12]=left_wheel_vel.
+        // We must remap before computing motor_targets. self.last_action stays as the legacy-mapped
+        // action so that new_motorized_wheel() obs (which skips index 9) gives back the original 14D.
+        let action_for_targets = if self.motorized_wheel_mode {
+            let mut mw = [0.0f32; NUM_MOTORS];
+            mw[0]  = action[0];   // left_hip_yaw   (policy[0])
+            mw[1]  = action[1];   // left_hip_roll   (policy[1])
+            mw[2]  = action[2];   // left_hip_pitch  (policy[2])
+            mw[3]  = action[3];   // left_knee       (policy[3])
+            mw[4]  = action[13];  // left_wheel vel  (policy[12] → legacy action[13])
+            mw[5]  = action[4];   // neck_pitch      (policy[4])
+            mw[6]  = action[5];   // head_pitch      (policy[5])
+            mw[7]  = action[6];   // head_yaw        (policy[6])
+            mw[8]  = action[7];   // head_roll       (policy[7])
+            mw[9]  = 0.0;         // mouth (controlled externally)
+            mw[10] = action[8];   // right_hip_yaw   (policy[8]; k<9 so action[8])
+            mw[11] = action[10];  // right_hip_roll  (policy[9]  → legacy action[10])
+            mw[12] = action[11];  // right_hip_pitch (policy[10] → legacy action[11])
+            mw[13] = action[12];  // right_knee      (policy[11] → legacy action[12])
+            mw[14] = action[14];  // right_wheel vel (policy[13] → legacy action[14])
+            mw
+        } else {
+            action
+        };
+
         let mut motor_targets = [0.0f64; NUM_MOTORS];
         for i in 0..NUM_MOTORS {
-            motor_targets[i] = self.default_positions[i] + effective_action_scale * action[i] as f64;
+            motor_targets[i] = self.default_positions[i] + effective_action_scale * action_for_targets[i] as f64;
         }
 
         // Apply head offsets to neck/head joints (motor indices 5-8: neck_pitch, head_pitch, head_yaw, head_roll)
@@ -1239,12 +1275,9 @@ impl Runtime {
         }
 
         if self.motorized_wheel_mode {
-            // Motorized wheel: action at WHEEL_MOTOR_INDICES are wheel velocity outputs.
-            // The legacy 14→15 mapping preserves joint ordering: action[4]=left_wheel_vel (policy[4]),
-            // action[14]=right_wheel_vel (policy[13]). motor_targets at those indices are ignored
-            // because write_goal_positions_no_wheels skips them.
-            let left_vel  = action[WHEEL_MOTOR_INDICES[0]] as f64 * WHEEL_MAX_VEL;
-            let right_vel = action[WHEEL_MOTOR_INDICES[1]] as f64 * WHEEL_MAX_VEL;
+            // action_for_targets[WHEEL_MOTOR_INDICES] holds the correct wheel velocities after remap.
+            let left_vel  = action_for_targets[WHEEL_MOTOR_INDICES[0]] as f64 * WHEEL_MAX_VEL;
+            let right_vel = action_for_targets[WHEEL_MOTOR_INDICES[1]] as f64 * WHEEL_MAX_VEL;
             self.motor_controller.write_wheel_velocities(left_vel, right_vel)
                 .context("Failed to write wheel velocities")?;
             self.motor_controller.write_goal_positions_no_wheels(&motor_targets)
