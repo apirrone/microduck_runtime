@@ -215,6 +215,22 @@ struct Args {
     #[arg(long, default_value_t = 0.6)]
     ground_pick_kp_ratio: f64,
 
+    /// Path to jump policy ONNX model file (enables X button one-shot jump)
+    #[arg(long, default_value = "~/microduck/policies/jump.onnx")]
+    jump: Option<String>,
+
+    /// Duration of one jump cycle in seconds
+    #[arg(long, default_value_t = 2.5)]
+    jump_period: f64,
+
+    /// Action scale to use during jump (overrides --action-scale for the duration)
+    #[arg(long, default_value_t = 1.0)]
+    jump_action_scale: f64,
+
+    /// kP multiplier applied to all motors during jump
+    #[arg(long, default_value_t = 1.0)]
+    jump_kp_ratio: f64,
+
     /// kP multiplier applied to all motors when using the standing policy (e.g. 0.6 = 40% reduction)
     #[arg(long, default_value_t = 0.6)]
     standing_kp_ratio: f64,
@@ -306,6 +322,13 @@ struct Runtime {
     ground_pick_kp_ratio: f64,
     prev_action_scale: f64,
     a_button_prev_state: bool,
+    // Jump
+    jump_active: bool,
+    jump_phase: f64,
+    jump_period: f64,
+    jump_action_scale: f64,
+    jump_kp_ratio: f64,
+    x_button_prev_state: bool,
     // Current estimation (running stats, updated every control step)
     estimate_current: bool,
     current_sum: f64,
@@ -430,6 +453,14 @@ impl Runtime {
             println!("  Ground pick period: {:.2}s (A button to trigger)", args.ground_pick_period);
         }
 
+        // Load jump model if specified
+        if let Some(ref jump_path) = args.jump {
+            println!("✓ Loading jump ONNX model from: {}", jump_path);
+            policy.add_jump(jump_path)
+                .context("Failed to load jump ONNX model")?;
+            println!("  Jump period: {:.2}s (X button to trigger)", args.jump_period);
+        }
+
         if args.pitch_offset != 0.0 {
             println!("⚠  Using pitch offset: {:.4} rad ({:.2}°)", args.pitch_offset, args.pitch_offset.to_degrees());
         }
@@ -543,6 +574,12 @@ impl Runtime {
             ground_pick_kp_ratio: args.ground_pick_kp_ratio,
             prev_action_scale: args.action_scale,
             a_button_prev_state: false,
+            jump_active: false,
+            jump_phase: 0.0,
+            jump_period: args.jump_period,
+            jump_action_scale: args.jump_action_scale,
+            jump_kp_ratio: args.jump_kp_ratio,
+            x_button_prev_state: false,
             estimate_current: args.estimate_current,
             current_sum: 0.0,
             current_count: 0,
@@ -690,7 +727,7 @@ impl Runtime {
             let right_x = Controller::apply_deadzone(state.right_stick_x, self.controller_deadzone);
             let right_y = Controller::apply_deadzone(state.right_stick_y, self.controller_deadzone);
 
-            // Handle Y button (North) to toggle head mode
+            // Handle Y button (West) to toggle head mode
             let y_pressed = self.controller.is_button_pressed("West");
             if y_pressed && !self.y_button_prev_state {
                 self.head_mode = !self.head_mode;
@@ -716,6 +753,22 @@ impl Runtime {
                 }
             }
             self.b_button_prev_state = b_pressed;
+
+            // Handle X button (North) to trigger one jump cycle
+            let x_pressed = self.controller.is_button_pressed("North");
+            if x_pressed && !self.x_button_prev_state && self.policy.has_jump() && !self.jump_active && !self.ground_pick_active {
+                self.jump_active = true;
+                self.jump_phase = 0.0;
+                self.policy.set_jump_active(true);
+                self.prev_action_scale = self.action_scale;
+                self.action_scale = self.jump_action_scale;
+                let (kp, ki, kd) = self.pid_gains;
+                let jump_kp = (kp as f64 * self.jump_kp_ratio).round() as u16;
+                self.motor_controller.set_pid_gains(jump_kp, ki, kd)
+                    .context("Failed to set jump PID gains")?;
+                println!("↑ Jump: started (period={:.1}s, action_scale={:.2}, kP={} → {})", self.jump_period, self.action_scale, kp, jump_kp);
+            }
+            self.x_button_prev_state = x_pressed;
 
             // Handle A button (South) to trigger one ground pick cycle
             let a_pressed = self.controller.is_button_pressed("South");
@@ -983,11 +1036,16 @@ impl Runtime {
         // Ground pick: override command with phase encoding [cos, sin, 0] and use 51D obs
         // Body pose mode: put normalized body_cmd into command slot (51D obs, matching standing policy training)
         let gp_cmd;
+        let jump_cmd;
         let standing_obs_cmd;
         let (effective_command, obs_command) = if self.ground_pick_active {
             let angle = 2.0 * std::f64::consts::PI * self.ground_pick_phase;
             gp_cmd = [angle.cos(), angle.sin(), 0.0];
             (&gp_cmd, &gp_cmd)
+        } else if self.jump_active {
+            let angle = 2.0 * std::f64::consts::PI * self.jump_phase;
+            jump_cmd = [angle.cos(), angle.sin(), 0.0];
+            (&jump_cmd, &jump_cmd)
         } else if self.body_pose_mode {
             // Keep effective_command = [0,0,0] so policy stays in standing mode.
             // Pass normalized body_cmd as the obs command (replaces vel cmd in 51D standing obs).
@@ -1002,7 +1060,7 @@ impl Runtime {
         };
 
         // Standing policy transitions: apply action_scale=1 and kp=60% when switching to standing
-        if !self.ground_pick_active && !self.roller_mode {
+        if !self.ground_pick_active && !self.jump_active && !self.roller_mode {
             let will_stand = self.policy.will_use_standing(effective_command);
             if will_stand && !self.is_using_standing {
                 self.is_using_standing = true;
@@ -1156,6 +1214,29 @@ impl Runtime {
                     self.motor_controller.set_pid_gains(kp, ki, kd)
                         .context("Failed to restore PID gains after ground pick")?;
                     println!("▲ Ground pick: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
+                }
+            }
+        }
+
+        // Advance jump phase; one-shot: clamp at 1.0 then hand back to walking/standing
+        if self.jump_active {
+            let dt = 1.0 / self.control_freq as f64;
+            self.jump_phase = (self.jump_phase + dt / self.jump_period).min(1.0);
+            if self.jump_phase >= 1.0 {
+                self.jump_active = false;
+                self.jump_phase = 0.0;
+                self.policy.set_jump_active(false);
+                self.action_scale = self.prev_action_scale;
+                let (kp, ki, kd) = self.pid_gains;
+                if self.is_using_standing {
+                    let standing_kp = (kp as f64 * self.standing_kp_ratio).round() as u16;
+                    self.motor_controller.set_pid_gains(standing_kp, ki, kd)
+                        .context("Failed to restore standing PID gains after jump")?;
+                    println!("↓ Jump: done, returning to standing (action_scale={:.2}, kP={})", self.action_scale, standing_kp);
+                } else {
+                    self.motor_controller.set_pid_gains(kp, ki, kd)
+                        .context("Failed to restore PID gains after jump")?;
+                    println!("↓ Jump: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
                 }
             }
         }

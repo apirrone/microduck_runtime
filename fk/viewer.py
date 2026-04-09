@@ -85,6 +85,39 @@ def connect(host, port):
             import time; time.sleep(1)
 
 
+def _load_foot_verts(model):
+    """Return {geom_id: Nx3 vertex array} for the two foot collision geoms.
+
+    Vertices are in each geom's local frame; use data.geom_xpos / data.geom_xmat
+    to transform them to world frame after mj_kinematics.
+    """
+    result = {}
+    for name in ("left_foot_collision", "right_foot_collision"):
+        gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
+        if gid < 0:
+            print(f"Warning: geom '{name}' not found — Z correction disabled")
+            continue
+        mid = model.geom_dataid[gid]
+        adr = model.mesh_vertadr[mid]
+        nvert = model.mesh_vertnum[mid]
+        verts = model.mesh_vert[adr : adr + nvert].copy()
+        result[gid] = verts
+    return result
+
+
+def _min_foot_world_z(data, foot_verts):
+    """Minimum world-Z across all foot collision mesh vertices."""
+    min_z = np.inf
+    for gid, verts in foot_verts.items():
+        pos = data.geom_xpos[gid]          # (3,) geom centre in world
+        mat = data.geom_xmat[gid].reshape(3, 3)  # geom→world rotation (row-major)
+        # z_world = pos[2] + row2(mat) · v  for each vertex v
+        z = pos[2] + mat[2, :] @ verts.T  # (nvert,)
+        if z.min() < min_z:
+            min_z = float(z.min())
+    return min_z
+
+
 def main():
     parser = argparse.ArgumentParser(description="Microduck digital twin viewer")
     parser.add_argument("--host", default="localhost", help="Runtime host (default: localhost)")
@@ -108,6 +141,9 @@ def main():
         sys.exit(1)
 
     data = mujoco.MjData(model)
+
+    # Load foot mesh vertices once — used each frame to correct trunk Z via MuJoCo FK
+    foot_verts = _load_foot_verts(model)
 
     # Build joint name → qpos index map
     joint_qpos = {}
@@ -158,22 +194,13 @@ def main():
             joints   = floats[4:19]   # 15 joint angles
             currents = floats[19:34]  # 15 motor currents (mA)
 
-            # Update local odometry if enabled
+            # Update local odometry if enabled (X/Y tracking only — Z comes from MuJoCo)
             if odo is not None:
                 odo.update(joints, (qw, qx, qy, qz), currents)
                 p = odo.position
-                odo_pos[:] = [p[0], p[1], p[2]]
-
-            # Set floating base pose: orientation from IMU, position from odometry
-            if freejoint_qpos_adr is not None:
-                # freejoint qpos layout: [x, y, z, qw, qx, qy, qz]
-                data.qpos[freejoint_qpos_adr + 0] = odo_pos[0]
-                data.qpos[freejoint_qpos_adr + 1] = odo_pos[1]
-                data.qpos[freejoint_qpos_adr + 2] = odo_pos[2]
-                data.qpos[freejoint_qpos_adr + 3] = qw
-                data.qpos[freejoint_qpos_adr + 4] = qx
-                data.qpos[freejoint_qpos_adr + 5] = qy
-                data.qpos[freejoint_qpos_adr + 6] = qz
+                odo_pos[0] = p[0]
+                odo_pos[1] = p[1]
+                # odo_pos[2] intentionally not updated — computed below via MuJoCo FK
 
             # Set joint angles
             for i, name in enumerate(JOINT_NAMES):
@@ -182,7 +209,25 @@ def main():
                 if name in joint_qpos:
                     data.qpos[joint_qpos[name]] = joints[i]
 
-            # Forward kinematics only (no physics)
+            # Set floating base: orientation from IMU, X/Y from odometry, Z=0 first pass
+            if freejoint_qpos_adr is not None:
+                # freejoint qpos layout: [x, y, z, qw, qx, qy, qz]
+                data.qpos[freejoint_qpos_adr + 0] = odo_pos[0]
+                data.qpos[freejoint_qpos_adr + 1] = odo_pos[1]
+                data.qpos[freejoint_qpos_adr + 2] = 0.0  # first pass: temp Z
+                data.qpos[freejoint_qpos_adr + 3] = qw
+                data.qpos[freejoint_qpos_adr + 4] = qx
+                data.qpos[freejoint_qpos_adr + 5] = qy
+                data.qpos[freejoint_qpos_adr + 6] = qz
+
+                if foot_verts:
+                    # Pass 1: kinematics at Z=0 to find foot sole world height
+                    mujoco.mj_kinematics(model, data)
+                    min_z = _min_foot_world_z(data, foot_verts)
+                    # Pass 2: lift trunk so lowest foot vertex is exactly at ground (z=0)
+                    data.qpos[freejoint_qpos_adr + 2] = -min_z
+
+            # Final forward kinematics (no physics)
             mujoco.mj_kinematics(model, data)
             v.sync()
 

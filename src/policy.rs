@@ -19,6 +19,8 @@ pub struct Policy {
     standing_mode: Option<PolicyMode>,
     ground_pick_mode: Option<PolicyMode>,
     ground_pick_active: bool,
+    jump_mode: Option<PolicyMode>,
+    jump_active: bool,
     start_time: Instant,
     command_threshold: f64,
     standing_disabled: bool,
@@ -32,6 +34,8 @@ impl Policy {
             standing_mode: None,
             ground_pick_mode: None,
             ground_pick_active: false,
+            jump_mode: None,
+            jump_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
             standing_disabled: false,
@@ -53,6 +57,8 @@ impl Policy {
             standing_mode: None,
             ground_pick_mode: None,
             ground_pick_active: false,
+            jump_mode: None,
+            jump_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
             standing_disabled: false,
@@ -80,6 +86,8 @@ impl Policy {
             standing_mode: Some(PolicyMode::Onnx(standing_session)),
             ground_pick_mode: None,
             ground_pick_active: false,
+            jump_mode: None,
+            jump_active: false,
             start_time: Instant::now(),
             command_threshold: 0.05,
             standing_disabled: false,
@@ -104,6 +112,26 @@ impl Policy {
     /// Whether a ground pick policy is loaded
     pub fn has_ground_pick(&self) -> bool {
         self.ground_pick_mode.is_some()
+    }
+
+    /// Load a jump policy from an ONNX model file
+    pub fn add_jump(&mut self, path: &str) -> Result<()> {
+        let session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(2)?
+            .commit_from_file(path)?;
+        self.jump_mode = Some(PolicyMode::Onnx(session));
+        Ok(())
+    }
+
+    /// Activate or deactivate jump mode
+    pub fn set_jump_active(&mut self, active: bool) {
+        self.jump_active = active;
+    }
+
+    /// Whether a jump policy is loaded
+    pub fn has_jump(&self) -> bool {
+        self.jump_mode.is_some()
     }
 
     /// Calculate command magnitude
@@ -134,6 +162,12 @@ impl Policy {
         if self.ground_pick_active {
             if let Some(ref mut gp_mode) = self.ground_pick_mode {
                 return Self::run_mode(gp_mode, observation, self.start_time, false); // ground pick always legacy 14-DOF
+            }
+        }
+        // Jump takes priority when active
+        if self.jump_active {
+            if let Some(ref mut jump_mode) = self.jump_mode {
+                return Self::run_mode(jump_mode, observation, self.start_time, false);
             }
         }
 
