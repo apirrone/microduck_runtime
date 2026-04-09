@@ -220,7 +220,7 @@ struct Args {
     jump: Option<String>,
 
     /// Duration of one jump cycle in seconds
-    #[arg(long, default_value_t = 2.5)]
+    #[arg(long, default_value_t = 1.0)]
     jump_period: f64,
 
     /// Action scale to use during jump (overrides --action-scale for the duration)
