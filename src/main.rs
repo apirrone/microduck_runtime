@@ -8,7 +8,8 @@ mod odometry;
 use anyhow::{Context, Result};
 use clap::Parser;
 use imu::{ImuController, Bno08xController, Bmi088Controller, AnyImuController};
-use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MOTOR_IDX, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE};
+use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MOTOR_IDX, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE,
+            DEFAULT_POSITION_MOTORIZED_WHEEL, WHEEL_MOTOR_INDICES, WHEEL_MAX_VEL, OPERATING_MODE_POSITION};
 use observation::Observation;
 use policy::Policy;
 use controller::Controller;
@@ -189,6 +190,11 @@ struct Args {
     #[arg(long)]
     roller: bool,
 
+    /// Motorized wheel mode: ankle motors use velocity control (Operating Mode 1).
+    /// Observation is 49D (no wheel joint_pos, no mouth). Never switches to standing policy.
+    #[arg(long)]
+    motorized_wheel: bool,
+
     /// Battery benchmark mode: robot walks on the spot until battery dies.
     /// Ignores controller input, auto-recovers from falls.
     /// Logs start time, elapsed time and current time every second to the given file.
@@ -336,6 +342,7 @@ struct Runtime {
     current_peak: f64,
     // Standing policy
     roller_mode: bool,
+    motorized_wheel_mode: bool,
     has_standing_policy: bool,
     is_using_standing: bool,
     standing_kp_ratio: f64,
@@ -431,6 +438,12 @@ impl Runtime {
         if args.roller {
             policy.set_standing_disabled(true);
             println!("✓ Roller mode: standing policy switching disabled");
+        }
+
+        // In motorized wheel mode, disable standing policy switching
+        if args.motorized_wheel {
+            policy.set_standing_disabled(true);
+            println!("✓ Motorized wheel mode: standing policy switching disabled");
         }
 
         // Battery benchmark: standing policy is kept active so it can handle fall recovery
@@ -554,6 +567,18 @@ impl Runtime {
             head_offsets: [0.0; 4],
             default_positions: {
                 let mut p = DEFAULT_POSITION;
+                if args.motorized_wheel {
+                    // Fill in the 12 position-controlled joints from the motorized-wheel default.
+                    // Skip wheel indices (4, 14) and mouth index (9); map remaining in order.
+                    let mut mw_iter = DEFAULT_POSITION_MOTORIZED_WHEEL.iter();
+                    for i in 0..NUM_MOTORS {
+                        if !WHEEL_MOTOR_INDICES.contains(&i) && i != MOUTH_MOTOR_IDX {
+                            if let Some(&v) = mw_iter.next() {
+                                p[i] = v;
+                            }
+                        }
+                    }
+                }
                 p[5] = args.neck_pitch_default;
                 p[6] = args.head_pitch_default;
                 p
@@ -585,6 +610,7 @@ impl Runtime {
             current_count: 0,
             current_peak: 0.0,
             roller_mode: args.roller,
+            motorized_wheel_mode: args.motorized_wheel,
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
             standing_kp_ratio: args.standing_kp_ratio,
@@ -661,6 +687,13 @@ impl Runtime {
         // Enable torque on all motors
         self.motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
+
+        // Motorized wheel mode: switch ankle motors to velocity control (Op Mode 1)
+        if self.motorized_wheel_mode {
+            self.motor_controller.set_wheel_motors_velocity_mode()
+                .context("Failed to set wheel motors to velocity mode")?;
+            println!("✓ Wheel motors set to velocity control (Operating Mode 1)");
+        }
 
         // Smoothly interpolate to default position over 3 seconds
         println!("Moving to default position over 1 second...");
@@ -819,6 +852,14 @@ impl Runtime {
                 let vel_x_raw = left_x as f64;
                 let vel_x = if vel_x_raw >= 0.0 { vel_x_raw * 0.6 } else { vel_x_raw * 0.5 };
                 let target_cmd = [vel_x, 0.0, -right_y as f64 * 1.0];
+                for i in 0..3 {
+                    self.command[i] += self.cmd_alpha * (target_cmd[i] - self.command[i]);
+                }
+            } else if self.motorized_wheel_mode {
+                // Motorized wheel (Segway): left stick forward/back = vel_x, right stick L/R = turn, no strafe
+                let vel_x_raw = left_x as f64;
+                let vel_x = if vel_x_raw >= 0.0 { vel_x_raw * self.max_linear_vel } else { vel_x_raw * self.max_linear_vel };
+                let target_cmd = [vel_x, 0.0, -right_y as f64 * self.max_angular_vel];
                 for i in 0..3 {
                     self.command[i] += self.cmd_alpha * (target_cmd[i] - self.command[i]);
                 }
@@ -1060,7 +1101,7 @@ impl Runtime {
         };
 
         // Standing policy transitions: apply action_scale=1 and kp=60% when switching to standing
-        if !self.ground_pick_active && !self.jump_active && !self.roller_mode {
+        if !self.ground_pick_active && !self.jump_active && !self.roller_mode && !self.motorized_wheel_mode {
             let will_stand = self.policy.will_use_standing(effective_command);
             if will_stand && !self.is_using_standing {
                 self.is_using_standing = true;
@@ -1081,14 +1122,24 @@ impl Runtime {
             }
         }
 
-        let observation = Observation::new(
-            &imu_data,
-            obs_command,
-            &motor_state,
-            &self.last_action,
-            &self.default_positions,
-            self.mouth_enabled,
-        );
+        let observation = if self.motorized_wheel_mode {
+            Observation::new_motorized_wheel(
+                &imu_data,
+                obs_command,
+                &motor_state,
+                &self.last_action,
+                &self.default_positions,
+            )
+        } else {
+            Observation::new(
+                &imu_data,
+                obs_command,
+                &motor_state,
+                &self.last_action,
+                &self.default_positions,
+                self.mouth_enabled,
+            )
+        };
 
         // Run policy inference (or hold default position if policy disabled)
         let action = if self.policy_enabled {
@@ -1187,8 +1238,21 @@ impl Runtime {
             self.step_counter += 1;
         }
 
-        self.motor_controller.write_goal_positions(&motor_targets)
-            .context("Failed to write motor positions")?;
+        if self.motorized_wheel_mode {
+            // Motorized wheel: action at WHEEL_MOTOR_INDICES are wheel velocity outputs.
+            // The legacy 14→15 mapping preserves joint ordering: action[4]=left_wheel_vel (policy[4]),
+            // action[14]=right_wheel_vel (policy[13]). motor_targets at those indices are ignored
+            // because write_goal_positions_no_wheels skips them.
+            let left_vel  = action[WHEEL_MOTOR_INDICES[0]] as f64 * WHEEL_MAX_VEL;
+            let right_vel = action[WHEEL_MOTOR_INDICES[1]] as f64 * WHEEL_MAX_VEL;
+            self.motor_controller.write_wheel_velocities(left_vel, right_vel)
+                .context("Failed to write wheel velocities")?;
+            self.motor_controller.write_goal_positions_no_wheels(&motor_targets)
+                .context("Failed to write motor positions (no wheels)")?;
+        } else {
+            self.motor_controller.write_goal_positions(&motor_targets)
+                .context("Failed to write motor positions")?;
+        }
 
         // Update last action
         self.last_action = action;
@@ -1508,6 +1572,14 @@ impl Runtime {
             println!("  Mean total current : {:.0} mA", mean);
             println!("  Peak total current : {:.0} mA", self.current_peak);
             println!("  (All 14 body motors cumulated)");
+        }
+
+        // Motorized wheel: restore ankle motors to position control so robot can be reused normally
+        if self.motorized_wheel_mode {
+            match self.motor_controller.set_wheel_motors_position_mode() {
+                Ok(()) => println!("✓ Wheel motors restored to position control (Operating Mode {})", OPERATING_MODE_POSITION),
+                Err(e) => eprintln!("⚠ Failed to restore wheel motors to position mode: {}", e),
+            }
         }
 
         // Note: We do NOT disable motor torque on shutdown

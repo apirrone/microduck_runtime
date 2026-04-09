@@ -1,5 +1,5 @@
 use crate::imu::ImuData;
-use crate::motor::{MotorState, NUM_MOTORS, MOUTH_MOTOR_IDX};
+use crate::motor::{MotorState, NUM_MOTORS, MOUTH_MOTOR_IDX, WHEEL_MOTOR_INDICES};
 
 /// Maximum observation size (with phase)
 pub const MAX_OBSERVATION_SIZE: usize = 60;
@@ -92,6 +92,67 @@ impl Observation {
     /// Get the observation size
     pub fn size(&self) -> usize {
         self.size
+    }
+
+    /// Create a 49D observation for the motorized-wheel policy.
+    ///
+    /// Layout: [gyro(3), accel(3), joint_pos(12), joint_vel(14), last_action(14), command(3)]
+    /// - joint_pos(12): all joints except wheels (WHEEL_MOTOR_INDICES) and mouth (MOUTH_MOTOR_IDX)
+    /// - joint_vel(14): all joints except mouth
+    /// - last_action(14): all joints except mouth
+    pub fn new_motorized_wheel(
+        imu: &ImuData,
+        command: &[f64; 3],
+        motor_state: &MotorState,
+        last_action: &[f32; NUM_MOTORS],
+        default_positions: &[f64; NUM_MOTORS],
+    ) -> Self {
+        let mut data = [0.0f32; MAX_OBSERVATION_SIZE];
+        let mut idx = 0;
+
+        // Angular velocity (3)
+        for i in 0..3 {
+            data[idx] = imu.gyro[i] as f32;
+            idx += 1;
+        }
+
+        // Accelerometer / projected gravity (3)
+        for i in 0..3 {
+            data[idx] = imu.accel[i] as f32;
+            idx += 1;
+        }
+
+        // Joint positions (12): skip wheels and mouth
+        for i in 0..NUM_MOTORS {
+            if WHEEL_MOTOR_INDICES.contains(&i) || i == MOUTH_MOTOR_IDX { continue; }
+            data[idx] = (motor_state.positions[i] - default_positions[i]) as f32;
+            idx += 1;
+        }
+
+        // Joint velocities (14): skip mouth only
+        for i in 0..NUM_MOTORS {
+            if i == MOUTH_MOTOR_IDX { continue; }
+            data[idx] = motor_state.velocities[i] as f32;
+            idx += 1;
+        }
+
+        // Last action (14): skip mouth only
+        for i in 0..NUM_MOTORS {
+            if i == MOUTH_MOTOR_IDX { continue; }
+            data[idx] = last_action[i];
+            idx += 1;
+        }
+
+        // Velocity commands (3)
+        for i in 0..3 {
+            data[idx] = command[i] as f32;
+            idx += 1;
+        }
+
+        let size = idx;
+        assert!(size == 49, "Motorized wheel observation size must be 49, got {}", size);
+
+        Self { data, size }
     }
 
     /// Get mutable access to the observation data
