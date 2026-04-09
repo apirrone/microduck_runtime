@@ -1,192 +1,156 @@
 """
-Contact-based odometry for microduck.
+Contact odometry for microduck.
 
-Contact detection fuses two signals:
-  - Torque excess: measured torque (from motor current) minus gravity-compensation
-    torque from the Placo model. High excess on ankle+knee → foot in stance.
-  - Foot height: which foot has lower world-frame Z (from FK + IMU orientation).
+Inspired by Rhoban humanoid model_service.cpp:
+  - Candidate contact points: 2 per foot (front and back of sole), 4 total.
+  - At each step, find the contact point with the lowest world Z.
+  - If lower than the current anchor (which sits at z=0), switch to it.
+  - Re-project trunk: anchor point at flat ground (z=0), trunk oriented by IMU.
 
-Position integration:
-  - Planted foot = world anchor. FK tells us where the foot is in trunk frame,
-    IMU gives trunk orientation, so:
-      pos_world_trunk = anchor_world_foot - R_world_trunk @ pos_trunk_foot
-  - Anchor is saved on each new contact event.
-  - Double-stance: average of both foot estimates.
+This naturally handles foot rolling: whichever edge touches first becomes
+the new anchor, without any explicit torque-based contact detection.
 """
 
 import numpy as np
 from microduck_fk import MicroduckFK, DEFAULT_URDF
 
-# XL330 motor torque constant (Nm per A).
-# Stall torque ~0.75 Nm @ 11.1V, stall current ~1.2 A → kT ≈ 0.625 Nm/A
-XL330_KT = 0.625
-# Static friction threshold (Nm) — below this, torque reading is noise
-XL330_FRICTION_NM = 0.02
 
-# Indices in the 15-element motor vector for the joints used in contact detection
-_LEFT_KNEE_IDX  = 3
-_LEFT_ANKLE_IDX = 4
-_RIGHT_KNEE_IDX = 13
-_RIGHT_ANKLE_IDX = 14
+# Half-length of the duck foot sole along X (trunk-frame forward).
+# Defines front/back contact point offsets from the foot frame origin.
+_FOOT_SOLE_HALF_LEN = 0.0255  # m — half of 51mm measured foot sole length
 
-# Torque excess threshold (Nm) to declare contact on a foot
-_TORQUE_CONTACT_THRESHOLD = 0.08
+# Candidate contact points: (side_label, frame_name, local_offset_in_frame)
+_CONTACT_POINTS = [
+    ("left",  "left_foot",  np.array([+_FOOT_SOLE_HALF_LEN, 0.0, 0.0])),
+    ("left",  "left_foot",  np.array([-_FOOT_SOLE_HALF_LEN, 0.0, 0.0])),
+    ("right", "right_foot", np.array([+_FOOT_SOLE_HALF_LEN, 0.0, 0.0])),
+    ("right", "right_foot", np.array([-_FOOT_SOLE_HALF_LEN, 0.0, 0.0])),
+]
 
-# Hysteresis: once in contact, need excess to drop below this to release
-_TORQUE_RELEASE_THRESHOLD = 0.04
-
-# Relative foot height margin (m): stance foot must be at least this much
-# lower than swing foot in world frame (relative comparison, no absolute needed)
-_HEIGHT_MARGIN = 0.005
+# A new point must be this many metres BELOW the current anchor to take over.
+# Prevents micro-switching on flat ground.
+_SWITCH_MARGIN = 0.003  # m
 
 
 class MicroduckOdometry:
     """
-    Fused contact odometry. Call update() each control cycle, then read .position and .yaw.
-
-    Args:
-        urdf_path: path to robot.urdf (defaults to fk/robot.urdf)
-        kt:        motor torque constant in Nm/A
-        friction:  per-joint static friction floor in Nm
+    Lowest-contact-point odometry. Call update() each cycle, then read .position / .yaw.
     """
 
-    def __init__(self, urdf_path: str = DEFAULT_URDF, kt: float = XL330_KT,
-                 friction: float = XL330_FRICTION_NM):
+    def __init__(self, urdf_path: str = DEFAULT_URDF):
         self._fk = MicroduckFK(urdf_path)
-        self._kt = kt
-        self._friction = friction
-
-        # World-frame trunk position [x, y, z].
-        # Seed z from FK at neutral pose: assume feet start on flat ground (world z=0),
-        # so trunk z ≈ -foot_z_in_trunk_frame (at identity rotation).
         self._fk.update([0.0] * 15)
-        foot_z_neutral = self._fk.get_pose('left_foot')[2, 3]
-        self._pos = np.array([0.0, 0.0, -foot_z_neutral])
-        # Last IMU quaternion [w, x, y, z]
-        self._quat = np.array([1.0, 0.0, 0.0, 0.0])
 
-        # Per-foot: world position of the foot when it last entered stance (anchor)
-        self._anchor = {'left': None, 'right': None}
-        # Per-foot: current contact state (bool)
-        self._contact = {'left': False, 'right': False}
+        # Current anchor: which contact point is "on the ground"
+        self._anchor_frame: str = "left_foot"
+        self._anchor_local: np.ndarray = np.zeros(3)
+        # World X,Y of the anchor (Z is always 0 — flat ground assumption)
+        self._anchor_xy: np.ndarray = np.zeros(2)
+
+        self._quat = np.array([1.0, 0.0, 0.0, 0.0])
+        self._side = "left"
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def update(self, joint_angles, imu_quat, currents_ma):
+    def update(self, joint_angles, imu_quat, currents_ma=None):  # type: ignore[reportUnusedParameter]
         """
-        Update odometry with new sensor data.
-
         Args:
             joint_angles: 15-element list/array (runtime motor order)
-            imu_quat:     [w, x, y, z] orientation of trunk_base in world
-            currents_ma:  15-element list/array of motor currents in mA
+            imu_quat:     [w, x, y, z] trunk orientation in world
+            currents_ma:  15-element list/array (unused — kept for API compatibility)
         """
         self._quat = np.asarray(imu_quat, dtype=float)
+        R = _quat_to_rot(self._quat)
+        robot = self._fk._robot
+
+        # 1. Update FK (world frame from previous step stays valid)
         self._fk.update(joint_angles)
 
-        R = self._quat_to_rot(self._quat)
+        # 2. Re-project robot: current anchor at (anchor_xy, 0), trunk oriented by IMU
+        self._apply_support_constraint(R)
 
-        # Foot positions in trunk frame
-        pos_left  = self._fk.get_pose('left_foot')[:3, 3]
-        pos_right = self._fk.get_pose('right_foot')[:3, 3]
-
-        # Relative world-frame Z (same offset cancels out — valid for comparison)
-        z_left  = R[2] @ pos_left
-        z_right = R[2] @ pos_right
-
-        # Gravity-compensation torques from model
-        tau_grav = self._fk._robot.static_gravity_compensation_torques_dict('trunk_base')
-
-        # Measured torques from currents
-        tau_meas = np.array(currents_ma, dtype=float) / 1000.0 * self._kt
-
-        # Torque excess per foot (ankle + knee combined)
-        def excess(ankle_idx, knee_idx, ankle_name, knee_name):
-            e_ankle = abs(tau_meas[ankle_idx]) - abs(tau_grav[ankle_name]) - self._friction
-            e_knee  = abs(tau_meas[knee_idx])  - abs(tau_grav[knee_name])  - self._friction
-            return max(0.0, e_ankle) + max(0.0, e_knee)
-
-        excess_left  = excess(_LEFT_ANKLE_IDX,  _LEFT_KNEE_IDX,  'left_ankle',  'left_knee')
-        excess_right = excess(_RIGHT_ANKLE_IDX, _RIGHT_KNEE_IDX, 'right_ankle', 'right_knee')
-
-        # Height tiebreaker: favour the lower foot when torques are ambiguous
-        height_vote_left  = z_left  < z_right - _HEIGHT_MARGIN
-        height_vote_right = z_right < z_left  - _HEIGHT_MARGIN
-
-        # Update contact state with hysteresis
-        prev_left  = self._contact['left']
-        prev_right = self._contact['right']
-
-        threshold_on  = _TORQUE_CONTACT_THRESHOLD
-        threshold_off = _TORQUE_RELEASE_THRESHOLD
-
-        # Torque-based contact
-        torque_left  = excess_left  > (threshold_off if prev_left  else threshold_on)
-        torque_right = excess_right > (threshold_off if prev_right else threshold_on)
-
-        # Fuse: torque OR (height AND at least some torque signal)
-        new_left  = torque_left  or (height_vote_left  and excess_left  > threshold_off * 0.5)
-        new_right = torque_right or (height_vote_right and excess_right > threshold_off * 0.5)
-
-        # Save anchors on contact start
-        if new_left and not prev_left:
-            self._anchor['left'] = self._pos + R @ pos_left
-        if new_right and not prev_right:
-            self._anchor['right'] = self._pos + R @ pos_right
-
-        self._contact['left']  = new_left
-        self._contact['right'] = new_right
-
-        # Position update from anchored feet
-        estimates = []
-        if new_left and self._anchor['left'] is not None:
-            estimates.append(self._anchor['left'] - R @ pos_left)
-        if new_right and self._anchor['right'] is not None:
-            estimates.append(self._anchor['right'] - R @ pos_right)
-
-        if estimates:
-            xy = np.mean(estimates, axis=0)[:2]
-            self._pos[0] = xy[0]
-            self._pos[1] = xy[1]
-
-        # Z: derive directly from FK on flat ground (avoids arc drift during stance).
-        # For any foot in contact: trunk_z = -(R @ foot_trunk)[2]
-        z_estimates = []
-        if new_left:
-            z_estimates.append(-(R @ pos_left)[2])
-        if new_right:
-            z_estimates.append(-(R @ pos_right)[2])
-        if z_estimates:
-            self._pos[2] = float(np.mean(z_estimates))
+        # 3. Find if any contact point went below the current anchor (z≈0)
+        new_anchor = self._find_lower_point(robot, threshold=-_SWITCH_MARGIN)
+        if new_anchor is not None:
+            frame, local, world_xy = new_anchor
+            self._anchor_frame = frame
+            self._anchor_local = local
+            self._anchor_xy = world_xy
+            self._side = "left" if "left" in frame else "right"
+            # Re-project with new anchor
+            self._apply_support_constraint(R)
 
     @property
     def position(self) -> np.ndarray:
         """World-frame position of trunk_base [x, y, z] in metres."""
-        return self._pos.copy()
+        T = self._fk._robot.get_T_world_frame("trunk_base")
+        return T[:3, 3].copy()
 
     @property
     def yaw(self) -> float:
-        """Trunk yaw in world frame (radians), extracted from IMU quaternion."""
+        """Trunk yaw in world frame (radians)."""
         w, x, y, z = self._quat
-        return float(np.arctan2(2*(w*z + x*y), 1 - 2*(y*y + z*z)))
+        return float(np.arctan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)))
 
     @property
     def contact(self) -> dict:
-        """{'left': bool, 'right': bool} — current contact state."""
-        return dict(self._contact)
+        """{'left': bool, 'right': bool} — which side is currently the anchor."""
+        return {"left": self._side == "left", "right": self._side == "right"}
 
     # ------------------------------------------------------------------
-    # Helpers
+    # Internal helpers
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _quat_to_rot(q):
-        """[w, x, y, z] → 3×3 rotation matrix."""
-        w, x, y, z = q / np.linalg.norm(q)
-        return np.array([
-            [1-2*(y*y+z*z),   2*(x*y-w*z),   2*(x*z+w*y)],
-            [  2*(x*y+w*z), 1-2*(x*x+z*z),   2*(y*z-w*x)],
-            [  2*(x*z-w*y),   2*(y*z+w*x), 1-2*(x*x+y*y)],
+    def _apply_support_constraint(self, R: np.ndarray) -> None:
+        """
+        Set the floating base so that the anchor contact point lands at
+        (anchor_xy, 0) in world frame, with trunk oriented by R.
+        """
+        robot = self._fk._robot
+        T_trunk_frame = robot.get_T_a_b("trunk_base", self._anchor_frame)
+        # Anchor point expressed in trunk frame
+        p_trunk_anchor = T_trunk_frame[:3, :3] @ self._anchor_local + T_trunk_frame[:3, 3]
+        # Rotate to world frame
+        R_p = R @ p_trunk_anchor
+        # Trunk world position: anchor at (xy, 0) → trunk = anchor - R_p
+        p_world_trunk = np.array([
+            self._anchor_xy[0] - R_p[0],
+            self._anchor_xy[1] - R_p[1],
+            -R_p[2],
         ])
+        T_world_trunk = np.eye(4)
+        T_world_trunk[:3, :3] = R
+        T_world_trunk[:3, 3] = p_world_trunk
+        robot.set_T_world_frame("trunk_base", T_world_trunk)
+        robot.update_kinematics()
+
+    def _find_lower_point(self, robot, threshold: float):
+        """
+        Return (frame, local_offset, world_xy) for the contact point lowest in
+        world Z, if it is below `threshold`. Otherwise return None.
+        """
+        lower_z = threshold
+        best = None
+        for _, frame, local in _CONTACT_POINTS:
+            T = robot.get_T_world_frame(frame)
+            p_world = T[:3, :3] @ local + T[:3, 3]
+            if p_world[2] < lower_z:
+                lower_z = p_world[2]
+                best = (frame, local, p_world[:2].copy())
+        return best
+
+
+# ------------------------------------------------------------------
+# Module-level helper (no class overhead)
+# ------------------------------------------------------------------
+
+def _quat_to_rot(q: np.ndarray) -> np.ndarray:
+    """[w, x, y, z] → 3×3 rotation matrix."""
+    w, x, y, z = q / np.linalg.norm(q)
+    return np.array([
+        [1 - 2 * (y * y + z * z),     2 * (x * y - w * z),     2 * (x * z + w * y)],
+        [    2 * (x * y + w * z), 1 - 2 * (x * x + z * z),     2 * (y * z - w * x)],
+        [    2 * (x * z - w * y),     2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
+    ])
