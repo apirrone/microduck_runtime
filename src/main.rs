@@ -134,6 +134,13 @@ struct Args {
     #[arg(long, default_value_t = 0.6, allow_hyphen_values = true)]
     action_scale: f64,
 
+    /// Action scale for position joints in motorized-wheel mode.
+    /// Wheels are unaffected (always at full WHEEL_MAX_VEL scale).
+    /// Defaults to 1.0 — balance needs full leg authority; use a lower value
+    /// if position joints shake too much.
+    #[arg(long, default_value_t = 1.0, allow_hyphen_values = true)]
+    motorized_wheel_action_scale: f64,
+
     /// Adapt action scale proportionally to battery voltage.
     /// Effective scale = action_scale × (nominal_voltage / measured_voltage).
     /// Compensates for kP varying linearly with supply voltage (BAM: kP ∝ V).
@@ -349,6 +356,7 @@ struct Runtime {
     // Standing policy
     roller_mode: bool,
     motorized_wheel_mode: bool,
+    motorized_wheel_action_scale: f64,
     invert_wheel: bool,
     has_standing_policy: bool,
     is_using_standing: bool,
@@ -624,6 +632,7 @@ impl Runtime {
             current_peak: 0.0,
             roller_mode: args.roller,
             motorized_wheel_mode: args.motorized_wheel,
+            motorized_wheel_action_scale: args.motorized_wheel_action_scale,
             invert_wheel: args.invert_wheel,
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
@@ -1178,11 +1187,18 @@ impl Runtime {
         // Convert action offsets to motor targets: init_pos + effective_action_scale * action.
         // When voltage_adapt is on, scale proportionally to battery voltage so that the
         // effective kP (which scales linearly with supply voltage) stays at the nominal level.
-        let effective_action_scale = if self.voltage_adapt {
-            // Clamp EMA to [6.0, 9.5] V to guard against bad readings or extreme states.
-            self.action_scale * (self.voltage_nominal / self.voltage_ema.clamp(6.0, 9.5))
+        // In motorized-wheel mode, use a separate scale for position joints (wheels are
+        // always at full WHEEL_MAX_VEL regardless of this scale).
+        let base_action_scale = if self.motorized_wheel_mode {
+            self.motorized_wheel_action_scale
         } else {
             self.action_scale
+        };
+        let effective_action_scale = if self.voltage_adapt {
+            // Clamp EMA to [6.0, 9.5] V to guard against bad readings or extreme states.
+            base_action_scale * (self.voltage_nominal / self.voltage_ema.clamp(6.0, 9.5))
+        } else {
+            base_action_scale
         };
         // For motorized-wheel mode, remap the policy output to the correct motor indices.
         //
