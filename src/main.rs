@@ -134,10 +134,10 @@ struct Args {
     #[arg(long, default_value_t = 0.6, allow_hyphen_values = true)]
     action_scale: f64,
 
-    /// Action scale for position joints in motorized-wheel mode.
-    /// Wheels are unaffected (always at full WHEEL_MAX_VEL scale).
-    /// Defaults to 1.0 — balance needs full leg authority; use a lower value
-    /// if position joints shake too much.
+    /// Wheel velocity scale in motorized-wheel mode (multiplies WHEEL_MAX_VEL).
+    /// Position joints always use --action-scale. Use this to tune wheel authority
+    /// independently, e.g. 1.2 for more aggressive balancing or 0.8 to reduce
+    /// wheel speed.
     #[arg(long, default_value_t = 1.0, allow_hyphen_values = true)]
     motorized_wheel_action_scale: f64,
 
@@ -1187,18 +1187,11 @@ impl Runtime {
         // Convert action offsets to motor targets: init_pos + effective_action_scale * action.
         // When voltage_adapt is on, scale proportionally to battery voltage so that the
         // effective kP (which scales linearly with supply voltage) stays at the nominal level.
-        // In motorized-wheel mode, use a separate scale for position joints (wheels are
-        // always at full WHEEL_MAX_VEL regardless of this scale).
-        let base_action_scale = if self.motorized_wheel_mode {
-            self.motorized_wheel_action_scale
-        } else {
-            self.action_scale
-        };
         let effective_action_scale = if self.voltage_adapt {
             // Clamp EMA to [6.0, 9.5] V to guard against bad readings or extreme states.
-            base_action_scale * (self.voltage_nominal / self.voltage_ema.clamp(6.0, 9.5))
+            self.action_scale * (self.voltage_nominal / self.voltage_ema.clamp(6.0, 9.5))
         } else {
-            base_action_scale
+            self.action_scale
         };
         // For motorized-wheel mode, remap the policy output to the correct motor indices.
         //
@@ -1318,8 +1311,8 @@ impl Runtime {
         if self.motorized_wheel_mode {
             // action_for_targets[WHEEL_MOTOR_INDICES] holds the correct wheel velocities after remap.
             let sign = if self.invert_wheel { -1.0 } else { 1.0 };
-            let left_vel  = sign * action_for_targets[WHEEL_MOTOR_INDICES[0]] as f64 * WHEEL_MAX_VEL;
-            let right_vel = sign * action_for_targets[WHEEL_MOTOR_INDICES[1]] as f64 * WHEEL_MAX_VEL;
+            let left_vel  = sign * action_for_targets[WHEEL_MOTOR_INDICES[0]] as f64 * WHEEL_MAX_VEL * self.motorized_wheel_action_scale;
+            let right_vel = sign * action_for_targets[WHEEL_MOTOR_INDICES[1]] as f64 * WHEEL_MAX_VEL * self.motorized_wheel_action_scale;
             self.motor_controller.write_wheel_velocities(left_vel, right_vel)
                 .context("Failed to write wheel velocities")?;
             self.motor_controller.write_goal_positions_no_wheels(&motor_targets)
