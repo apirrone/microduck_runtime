@@ -1016,7 +1016,7 @@ impl Runtime {
         }
 
         // Read motor state; on transient failure reuse the last valid reading
-        let motor_state = match self.motor_controller.read_state() {
+        let mut motor_state = match self.motor_controller.read_state() {
             Ok(state) => {
                 self.last_motor_state = state.clone();
                 state
@@ -1026,6 +1026,19 @@ impl Runtime {
                 self.last_motor_state.clone()
             }
         };
+
+        // In motorized-wheel mode the bulk read fails for velocity-mode motors,
+        // returning stale (or zero) wheel velocities. Patch with a dedicated
+        // sync_read on just the two wheel IDs, which works correctly in Mode 1.
+        if self.motorized_wheel_mode {
+            match self.motor_controller.read_wheel_velocities() {
+                Ok((lv, rv)) => {
+                    motor_state.velocities[WHEEL_MOTOR_INDICES[0]] = lv;
+                    motor_state.velocities[WHEEL_MOTOR_INDICES[1]] = rv;
+                }
+                Err(e) => eprintln!("Wheel vel read error: {e}"),
+            }
+        }
 
         // Digital twin streaming: send [qw, qx, qy, qz, j0..j14] as 19 × f32 LE
         if self.stream_listener.is_some() {
