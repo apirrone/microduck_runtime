@@ -443,6 +443,21 @@ impl MotorController {
         Ok(())
     }
 
+    /// Read present velocities of the two wheel motors only [rad/s].
+    /// Uses a dedicated sync_read_present_velocity on just the two wheel IDs,
+    /// avoiding the full bulk read which can fail in velocity control mode.
+    /// Returns (left_vel_rad_s, right_vel_rad_s).
+    pub fn read_wheel_velocities(&mut self) -> Result<(f64, f64)> {
+        let wheel_ids = [MOTOR_IDS[WHEEL_MOTOR_INDICES[0]], MOTOR_IDS[WHEEL_MOTOR_INDICES[1]]];
+        let raw = self.controller
+            .sync_read_present_velocity(&wheel_ids)
+            .map_err(|e| anyhow::anyhow!("Failed to read wheel velocities: {}", e))?;
+        Ok((
+            convert_velocity(raw[0] as f64),
+            convert_velocity(raw[1] as f64),
+        ))
+    }
+
     /// Write goal velocities to the two wheel motors.
     /// `left_vel_rad_s` and `right_vel_rad_s` are in rad/s.
     pub fn write_wheel_velocities(&mut self, left_vel_rad_s: f64, right_vel_rad_s: f64) -> Result<()> {

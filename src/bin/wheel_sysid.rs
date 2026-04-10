@@ -123,10 +123,8 @@ fn main() -> Result<()> {
             let loop_start = Instant::now();
             let t = experiment_start.elapsed().as_secs_f64();
 
-            match mc.read_state() {
-                Ok(state) => {
-                    let left_vel  = state.velocities[WHEEL_MOTOR_INDICES[0]];
-                    let right_vel = state.velocities[WHEEL_MOTOR_INDICES[1]];
+            match mc.read_wheel_velocities() {
+                Ok((left_vel, right_vel)) => {
                     writeln!(file, "{:.6},{:.3},{:.6},{:.6},{},{}",
                              t, current_cmd, left_vel, right_vel, left_id, right_id)?;
                 }
