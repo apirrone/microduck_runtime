@@ -377,6 +377,10 @@ struct Runtime {
     odometry_engine: Option<odometry::Odometry>,
     /// Latest odometry estimate [x, y, z, yaw] in world frame (metres / radians)
     pub odometry: [f64; 4],
+    // Last successfully read motor state (used as fallback on read failure)
+    last_motor_state: motor::MotorState,
+    // Cumulative count of motor read failures (shown in status line)
+    read_error_count: u64,
 }
 
 impl Runtime {
@@ -677,6 +681,8 @@ impl Runtime {
                 None
             },
             odometry: [0.0; 4],
+            last_motor_state: motor::MotorState::default(),
+            read_error_count: 0,
         })
     }
 
@@ -1000,9 +1006,17 @@ impl Runtime {
             }
         }
 
-        // Read motor state
-        let motor_state = self.motor_controller.read_state()
-            .context("Failed to read motor state")?;
+        // Read motor state; on transient failure reuse the last valid reading
+        let motor_state = match self.motor_controller.read_state() {
+            Ok(state) => {
+                self.last_motor_state = state.clone();
+                state
+            }
+            Err(_) => {
+                self.read_error_count += 1;
+                self.last_motor_state.clone()
+            }
+        };
 
         // Digital twin streaming: send [qw, qx, qy, qz, j0..j14] as 19 × f32 LE
         if self.stream_listener.is_some() {
@@ -1448,8 +1462,14 @@ impl Runtime {
                 let cmd_str = format!(" | Cmd: [{:.2}, {:.2}, {:.2}]",
                     self.command[0], self.command[1], self.command[2]);
 
+                let err_str = if self.read_error_count > 0 {
+                    format!(" | ReadErr: {}", self.read_error_count)
+                } else {
+                    String::new()
+                };
+
                 println!(
-                    "⏱️  Runtime: {:.1}s | Iter: {} | Avg: {:.2}ms ({:.1}%) | Min: {:.2}ms | Max: {:.2}ms | Jitter: {:.2}ms | Freq: {:.1}Hz | {}{}",
+                    "⏱️  Runtime: {:.1}s | Iter: {} | Avg: {:.2}ms ({:.1}%) | Min: {:.2}ms | Max: {:.2}ms | Jitter: {:.2}ms | Freq: {:.1}Hz | {}{}{}",
                     total_elapsed,
                     iteration,
                     avg_time.as_secs_f64() * 1000.0,
@@ -1459,7 +1479,8 @@ impl Runtime {
                     jitter * 1000.0,
                     actual_freq,
                     current_str,
-                    cmd_str
+                    cmd_str,
+                    err_str
                 );
 
                 // Reset jitter tracking for next interval
