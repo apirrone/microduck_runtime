@@ -426,16 +426,16 @@ impl Runtime {
             println!("✓ Using dummy policy (always outputs zeros)");
             Policy::new_dummy().context("Failed to create dummy policy")?
         } else if let Some(ref walking_path) = args.model {
+            println!("✓ Loading ONNX model from: {}", walking_path);
+            let mut p = Policy::new_onnx(walking_path).context("Failed to load ONNX model")?;
             if let Some(ref standing_path) = args.standing {
-                println!("✓ Loading walking ONNX model from: {}", walking_path);
                 println!("✓ Loading standing ONNX model from: {}", standing_path);
-                println!("✓ Policy switching enabled (threshold: 0.05 for cmd magnitude)");
-                Policy::new_dual_onnx(walking_path, standing_path)
-                    .context("Failed to load dual ONNX models")?
-            } else {
-                println!("✓ Loading ONNX model from: {}", walking_path);
-                Policy::new_onnx(walking_path).context("Failed to load ONNX model")?
+                match p.add_standing(standing_path) {
+                    Ok(()) => println!("✓ Policy switching enabled (threshold: 0.05 for cmd magnitude)"),
+                    Err(e) => eprintln!("⚠  Failed to load standing policy (switching disabled): {}", e),
+                }
             }
+            p
         } else {
             println!("! No policy specified, using dummy policy");
             Policy::new_dummy().context("Failed to create dummy policy")?
@@ -468,17 +468,19 @@ impl Runtime {
         // Load ground pick model if specified
         if let Some(ref gp_path) = args.ground_pick {
             println!("✓ Loading ground pick ONNX model from: {}", gp_path);
-            policy.add_ground_pick(gp_path)
-                .context("Failed to load ground pick ONNX model")?;
-            println!("  Ground pick period: {:.2}s (A button to trigger)", args.ground_pick_period);
+            match policy.add_ground_pick(gp_path) {
+                Ok(()) => println!("  Ground pick period: {:.2}s (A button to trigger)", args.ground_pick_period),
+                Err(e) => eprintln!("⚠  Failed to load ground pick policy (A button disabled): {}", e),
+            }
         }
 
         // Load jump model if specified
         if let Some(ref jump_path) = args.jump {
             println!("✓ Loading jump ONNX model from: {}", jump_path);
-            policy.add_jump(jump_path)
-                .context("Failed to load jump ONNX model")?;
-            println!("  Jump period: {:.2}s (X button to trigger)", args.jump_period);
+            match policy.add_jump(jump_path) {
+                Ok(()) => println!("  Jump period: {:.2}s (X button to trigger)", args.jump_period),
+                Err(e) => eprintln!("⚠  Failed to load jump policy (X button disabled): {}", e),
+            }
         }
 
         if args.pitch_offset != 0.0 {

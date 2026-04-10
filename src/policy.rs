@@ -65,33 +65,14 @@ impl Policy {
         })
     }
 
-    /// Create a new policy with both walking and standing models
-    ///
-    /// # Arguments
-    /// * `walking_path` - Path to the walking policy ONNX model file
-    /// * `standing_path` - Path to the standing policy ONNX model file
-    pub fn new_dual_onnx(walking_path: &str, standing_path: &str) -> Result<Self> {
-        let walking_session = Session::builder()?
+    /// Load a standing policy from an ONNX model file
+    pub fn add_standing(&mut self, path: &str) -> Result<()> {
+        let session = Session::builder()?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(2)?
-            .commit_from_file(walking_path)?;
-
-        let standing_session = Session::builder()?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(2)?
-            .commit_from_file(standing_path)?;
-
-        Ok(Self {
-            mode: PolicyMode::Onnx(walking_session),
-            standing_mode: Some(PolicyMode::Onnx(standing_session)),
-            ground_pick_mode: None,
-            ground_pick_active: false,
-            jump_mode: None,
-            jump_active: false,
-            start_time: Instant::now(),
-            command_threshold: 0.05,
-            standing_disabled: false,
-        })
+            .commit_from_file(path)?;
+        self.standing_mode = Some(PolicyMode::Onnx(session));
+        Ok(())
     }
 
     /// Load a ground pick policy from an ONNX model file
