@@ -754,7 +754,7 @@ impl Runtime {
             }
             self.b_button_prev_state = b_pressed;
 
-            // Handle X button (North) to trigger one jump cycle
+            // Handle X button (North) to trigger one jump cycle (auto-exits on completion)
             let x_pressed = self.controller.is_button_pressed("North");
             if x_pressed && !self.x_button_prev_state && self.policy.has_jump() && !self.jump_active && !self.ground_pick_active {
                 self.jump_active = true;
@@ -1218,7 +1218,7 @@ impl Runtime {
             }
         }
 
-        // Advance jump phase; one-shot: clamp at 1.0 then hand back to walking/standing
+        // Advance jump phase; one-shot (clamp at 1.0), auto-exit on completion
         if self.jump_active {
             let dt = 1.0 / self.control_freq as f64;
             self.jump_phase = (self.jump_phase + dt / self.jump_period).min(1.0);
