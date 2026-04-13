@@ -45,9 +45,18 @@ const MOTOR_JOINTS: [Option<&str>; 15] = [
 /// Derived from foot_tpu_bottom.stl: sole is 51mm long → half = 25.5mm.
 const FOOT_SOLE_HALF_LEN: f64 = 0.0255;
 
+/// Half-width of the foot sole along foot-frame Y (left/right of sole).
+/// Derived from foot_tpu_bottom.stl: sole is ~40mm wide → half = 20mm.
+const FOOT_SOLE_HALF_WIDTH: f64 = 0.020;
+
 /// A new contact point must be this many metres BELOW the anchor to take over.
 /// Prevents micro-switching on flat ground.
 const SWITCH_MARGIN: f64 = 0.003;
+
+/// Number of consecutive ticks a candidate must be lower before the anchor
+/// switches.  Prevents single-frame noise spikes from corrupting the estimate.
+/// At 50 Hz this is 40 ms — well within a normal step duration (~300 ms).
+const SWITCH_CONFIRM_TICKS: u32 = 2;
 
 /// URDF joint names for the left / right foot frames (fixed joints).
 const LEFT_FOOT_JOINT: &str = "left_foot_frame";
@@ -145,6 +154,10 @@ pub struct Odometry {
     pub position: [f64; 3],
     /// Latest trunk yaw (radians).
     pub yaw: f64,
+    /// Pending contact switch candidate (must persist for SWITCH_CONFIRM_TICKS).
+    pending_switch: Option<(usize, Vector3<f64>, [f64; 2])>,
+    /// How many consecutive ticks the pending candidate has been the lowest point.
+    pending_ticks: u32,
 }
 
 impl Odometry {
@@ -175,6 +188,8 @@ impl Odometry {
             anchor_xy: [0.0, 0.0],
             position: [0.0, 0.0, initial_z],
             yaw: 0.0,
+            pending_switch: None,
+            pending_ticks: 0,
         })
     }
 
@@ -197,12 +212,33 @@ impl Odometry {
         // Re-project trunk: current anchor sits at (anchor_xy, 0)
         self.apply_support(&r);
 
-        // Find if any contact point went below the anchor (which is at z≈0)
-        if let Some((chain_idx, local, world_xy)) = self.find_lower(&r, -SWITCH_MARGIN) {
-            self.anchor_chain = chain_idx;
-            self.anchor_local = local;
-            self.anchor_xy = world_xy;
-            self.apply_support(&r);
+        // Contact switch with temporal confirmation — requires SWITCH_CONFIRM_TICKS
+        // consecutive ticks where the same candidate is the lowest point.
+        // A single noisy frame can drop the foot 3 mm without this check.
+        match self.find_lower(&r, -SWITCH_MARGIN) {
+            None => {
+                self.pending_switch = None;
+                self.pending_ticks = 0;
+            }
+            Some((chain_idx, local, world_xy)) => {
+                let same = self.pending_switch
+                    .as_ref()
+                    .map_or(false, |(pi, _, _)| *pi == chain_idx);
+                if same {
+                    self.pending_ticks += 1;
+                } else {
+                    self.pending_switch = Some((chain_idx, local, world_xy));
+                    self.pending_ticks = 1;
+                }
+                if self.pending_ticks >= SWITCH_CONFIRM_TICKS {
+                    let (ci, loc, wxy) = self.pending_switch.take().unwrap();
+                    self.anchor_chain = ci;
+                    self.anchor_local = loc;
+                    self.anchor_xy    = wxy;
+                    self.apply_support(&r);
+                    self.pending_ticks = 0;
+                }
+            }
         }
 
         let rm = r.matrix();
@@ -225,11 +261,17 @@ impl Odometry {
     fn find_lower(&self, r: &Rotation3<f64>, threshold: f64)
         -> Option<(usize, Vector3<f64>, [f64; 2])>
     {
+        // 4 corners per foot (front-left, front-right, back-left, back-right).
+        // Including foot width catches lateral tilt that the centreline misses.
         let candidates = [
-            (0usize, Vector3::new( FOOT_SOLE_HALF_LEN, 0.0, 0.0)),
-            (0,      Vector3::new(-FOOT_SOLE_HALF_LEN, 0.0, 0.0)),
-            (1,      Vector3::new( FOOT_SOLE_HALF_LEN, 0.0, 0.0)),
-            (1,      Vector3::new(-FOOT_SOLE_HALF_LEN, 0.0, 0.0)),
+            (0usize, Vector3::new( FOOT_SOLE_HALF_LEN,  FOOT_SOLE_HALF_WIDTH, 0.0)),
+            (0,      Vector3::new( FOOT_SOLE_HALF_LEN, -FOOT_SOLE_HALF_WIDTH, 0.0)),
+            (0,      Vector3::new(-FOOT_SOLE_HALF_LEN,  FOOT_SOLE_HALF_WIDTH, 0.0)),
+            (0,      Vector3::new(-FOOT_SOLE_HALF_LEN, -FOOT_SOLE_HALF_WIDTH, 0.0)),
+            (1,      Vector3::new( FOOT_SOLE_HALF_LEN,  FOOT_SOLE_HALF_WIDTH, 0.0)),
+            (1,      Vector3::new( FOOT_SOLE_HALF_LEN, -FOOT_SOLE_HALF_WIDTH, 0.0)),
+            (1,      Vector3::new(-FOOT_SOLE_HALF_LEN,  FOOT_SOLE_HALF_WIDTH, 0.0)),
+            (1,      Vector3::new(-FOOT_SOLE_HALF_LEN, -FOOT_SOLE_HALF_WIDTH, 0.0)),
         ];
 
         let trunk_pos = Vector3::from(self.position);

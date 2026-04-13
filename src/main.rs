@@ -53,9 +53,15 @@ struct Args {
     #[arg(short, long, default_value_t = 1_000_000)]
     baudrate: u32,
 
-    /// Control loop frequency in Hz
+    /// Control loop frequency in Hz (policy inference + motor I/O)
     #[arg(short, long, default_value_t = 50)]
     freq: u32,
+
+    /// Odometry update frequency in Hz (must be a multiple of --freq).
+    /// Extra ticks read the IMU and update odometry with cached joint angles,
+    /// giving smoother position/yaw estimates without affecting policy timing.
+    #[arg(long, default_value_t = 100)]
+    odo_freq: u32,
 
     /// Use dummy policy (always outputs zeros) for testing
     #[arg(short, long)]
@@ -304,6 +310,7 @@ struct Runtime {
     policy: Policy,
     controller: Controller,
     control_freq: u32,
+    odo_freq: u32,
     pid_gains: (u16, u16, u16), // (kP, kI, kD)
     pitch_offset: f64,
     last_action: [f32; NUM_MOTORS],
@@ -568,6 +575,11 @@ impl Runtime {
             policy,
             controller,
             control_freq: args.freq,
+            odo_freq: {
+                // Clamp to a multiple of policy freq; fall back to policy freq if invalid
+                let of = args.odo_freq.max(args.freq);
+                if of % args.freq == 0 { of } else { args.freq * (of / args.freq) }
+            },
             pid_gains: (args.kp, args.ki, args.kd),
             pitch_offset: args.pitch_offset,
             last_action: [0.0; NUM_MOTORS],
@@ -757,6 +769,26 @@ impl Runtime {
             }
         }
 
+        Ok(())
+    }
+
+    /// Lightweight inter-policy odometry update: read IMU only (no motor I/O),
+    /// call odo.update() with the last-known joint angles.
+    /// Used by the high-frequency odometry ticks between full control steps.
+    fn imu_odo_step(&mut self) -> Result<()> {
+        if self.odometry_engine.is_none() {
+            return Ok(());
+        }
+        let imu_data = self.imu_controller.read()
+            .context("Failed to read IMU (odo step)")?;
+        // Extract angles before the mutable borrow of odometry_engine to avoid
+        // the closure in from_fn capturing self while odo is live.
+        let angles: [f64; 15] = std::array::from_fn(|i| self.last_motor_state.positions[i]);
+        if let Some(odo) = &mut self.odometry_engine {
+            odo.update(&angles, imu_data.quat);
+            let p = odo.position;
+            self.odometry = [p[0], p[1], p[2], odo.yaw];
+        }
         Ok(())
     }
 
@@ -1397,7 +1429,7 @@ impl Runtime {
 
     /// Run the main control loop
     async fn run(&mut self, shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<()> {
-        println!("Starting control loop at {} Hz (using tokio interval)", self.control_freq);
+        println!("Starting control loop at {} Hz (policy), {} Hz (odometry)", self.control_freq, self.odo_freq);
 
         // Set start time for CSV logging and recording
         self.start_time = Some(Instant::now());
@@ -1419,13 +1451,21 @@ impl Runtime {
             None
         };
 
-        let dt = Duration::from_secs_f64(1.0 / self.control_freq as f64);
-        let mut iteration: u64 = 0;
+        // policy_every: run full control_step() once every N odo ticks.
+        // odo_freq >= control_freq and odo_freq is a multiple of control_freq.
+        let policy_every = self.odo_freq / self.control_freq;
+        let dt = Duration::from_secs_f64(1.0 / self.odo_freq as f64);
+        let mut iteration: u64 = 0;   // policy-step counter
+        let mut odo_tick: u64 = 0;    // every-tick counter
         let mut total_time = Duration::ZERO;
         let mut min_loop_time = Duration::from_secs(999999);
         let mut max_loop_time = Duration::ZERO;
         let mut last_report_iteration: u64 = 0;
         let mut missed_deadlines: u64 = 0;
+
+        if policy_every > 1 {
+            println!("Odometry running at {} Hz (policy at {} Hz)", self.odo_freq, self.control_freq);
+        }
 
         // Create tokio interval with MissedTickBehavior::Burst
         // Burst mode will catch up on missed ticks rather than skipping them
@@ -1435,6 +1475,17 @@ impl Runtime {
         while !shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
             // Wait for next tick
             interval.tick().await;
+            odo_tick += 1;
+
+            let is_policy_tick = odo_tick % policy_every as u64 == 0;
+
+            if !is_policy_tick {
+                // IMU + odometry only — no motor I/O, no policy inference
+                if let Err(e) = self.imu_odo_step() {
+                    eprintln!("Error in odo step: {}", e);
+                }
+                continue;
+            }
 
             let loop_start = Instant::now();
 
