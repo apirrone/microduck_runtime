@@ -50,8 +50,10 @@ const FOOT_SOLE_HALF_LEN: f64 = 0.0255;
 const FOOT_SOLE_HALF_WIDTH: f64 = 0.020;
 
 /// A new contact point must be this many metres BELOW the anchor to take over.
-/// Prevents micro-switching on flat ground.
-const SWITCH_MARGIN: f64 = 0.003;
+/// Anchor is always pinned at z=0, so this is an absolute world-Z threshold.
+/// 0.0 = switch to whichever foot is lowest; positive values add hysteresis
+/// but risk the anchor never switching on flat ground (empirically bad).
+const SWITCH_MARGIN: f64 = 0.0;
 
 /// Number of consecutive ticks a candidate must be lower before the anchor
 /// switches.  Prevents single-frame noise spikes from corrupting the estimate.
