@@ -296,10 +296,6 @@ struct Args {
     #[arg(long, default_value_t = 9870)]
     stream_port: u16,
 
-    /// Path to robot.urdf for inline odometry (used when --stream is active).
-    /// Defaults to ~/microduck/robot.urdf.
-    #[arg(long)]
-    urdf: Option<String>,
 }
 
 
@@ -689,21 +685,8 @@ impl Runtime {
             },
             stream_client: None,
             odometry_engine: if args.stream {
-                let path = args.urdf.clone().unwrap_or_else(|| {
-                    std::env::var("HOME")
-                        .map(|h| format!("{}/microduck/robot.urdf", h))
-                        .unwrap_or_else(|_| "robot.urdf".to_string())
-                });
-                match odometry::Odometry::new(&path) {
-                    Ok(odo) => {
-                        println!("Odometry initialized from {}", path);
-                        Some(odo)
-                    }
-                    Err(e) => {
-                        eprintln!("Warning: odometry disabled — could not load URDF '{}': {}", path, e);
-                        None
-                    }
-                }
+                println!("Odometry initialized (MJCF hardcoded chains)");
+                Some(odometry::Odometry::new())
             } else {
                 None
             },
