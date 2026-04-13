@@ -104,12 +104,17 @@ struct Args {
     #[arg(long)]
     raw_accelerometer: bool,
 
-    /// Use BNO08X IMU (BNO080/085/086) instead of the default BNO055
+    /// Use BNO08X IMU (BNO080/085/086) instead of the default BMI088
     /// Connects via I2C at address 0x4A (default) on /dev/i2c-1
     #[arg(long)]
     bno08x: bool,
 
-    /// Use BMI088 IMU instead of the default BNO055
+    /// Use BNO055 IMU instead of the default BMI088
+    /// Connects via I2C on /dev/i2c-1 at address 0x28
+    #[arg(long)]
+    bno055: bool,
+
+    /// Use BMI088 IMU (default, explicit selection)
     /// Connects via I2C on /dev/i2c-1 (accel 0x19, gyro 0x68)
     #[arg(long)]
     bmi088: bool,
@@ -407,12 +412,7 @@ impl Runtime {
                 .context("Failed to initialize IMU controller (BNO08X on /dev/i2c-1 at 0x4B)")?;
             println!("✓ IMU controller initialized (BNO08X) - using projected gravity from rotation vector");
             AnyImuController::Bno08x(ctrl)
-        } else if args.bmi088 {
-            let ctrl = Bmi088Controller::new_default()
-                .context("Failed to initialize IMU controller (BMI088 on /dev/i2c-1)")?;
-            println!("✓ IMU controller initialized (BMI088) - using projected gravity from Madgwick filter");
-            AnyImuController::Bmi088(ctrl)
-        } else {
+        } else if args.bno055 {
             let use_projected_gravity = !args.raw_accelerometer;
             let ctrl = ImuController::new_default_with_mode(use_projected_gravity)
                 .context("Failed to initialize IMU controller (BNO055 on /dev/i2c-1)")?;
@@ -422,6 +422,12 @@ impl Runtime {
                 println!("✓ IMU controller initialized (BNO055) - using raw accelerometer");
             }
             AnyImuController::Bno055(ctrl)
+        } else {
+            // Default: BMI088 (also selected explicitly via --bmi088)
+            let ctrl = Bmi088Controller::new_default()
+                .context("Failed to initialize IMU controller (BMI088 on /dev/i2c-1)")?;
+            println!("✓ IMU controller initialized (BMI088) - using projected gravity from Madgwick filter");
+            AnyImuController::Bmi088(ctrl)
         };
 
         // Set gravity offset if specified

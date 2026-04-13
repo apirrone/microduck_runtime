@@ -147,9 +147,9 @@ fi
 # Ask which IMU is installed
 echo ""
 echo -e "${GREEN}Which IMU is installed on your robot?${NC}"
-echo "  1) BNO055 (default)"
+echo "  1) BMI088 (default)"
 echo "  2) BNO08X (BNO080/085/086)"
-echo "  3) BMI088"
+echo "  3) BNO055"
 read -r -p "Enter choice [1/2/3, default=1]: " IMU_CHOICE </dev/tty
 case "$IMU_CHOICE" in
     2)
@@ -157,12 +157,12 @@ case "$IMU_CHOICE" in
         echo -e "  → Using ${GREEN}BNO08X${NC}"
         ;;
     3)
-        IMU_FLAG="--bmi088"
-        echo -e "  → Using ${GREEN}BMI088${NC}"
+        IMU_FLAG="--bno055"
+        echo -e "  → Using ${GREEN}BNO055${NC}"
         ;;
     *)
         IMU_FLAG=""
-        echo -e "  → Using ${GREEN}BNO055${NC}"
+        echo -e "  → Using ${GREEN}BMI088${NC} (default)"
         ;;
 esac
 echo ""
