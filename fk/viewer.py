@@ -2,14 +2,18 @@
 Digital twin viewer for microduck.
 
 Connects to the runtime's TCP stream (--stream --stream-port PORT),
-receives [qw, qx, qy, qz, j0..j14] at 50 Hz, and renders the robot
-live in a MuJoCo passive viewer.
+receives 36 × f32 LE per frame:
+  [0..3]   IMU quaternion [w, x, y, z]
+  [4..18]  joint positions (runtime motor order)
+  [19..33] motor currents in mA
+  [34..35] odometry x, y in metres (from Rust onboard odometry)
 
 Usage:
     uv run viewer.py --host 192.168.x.x --port 9870
 """
 
 import argparse
+import math
 import os
 import socket
 import struct
@@ -20,21 +24,8 @@ import mujoco.viewer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-PACKET_FLOATS = 34          # 4 quat + 15 joints + 15 currents
+PACKET_FLOATS = 36          # 4 quat + 15 joints + 15 currents + 2 odometry (x, y)
 PACKET_BYTES  = PACKET_FLOATS * 4
-
-
-def quat_to_mat(qw, qx, qy, qz):
-    """Quaternion [w, x, y, z] → 3x3 rotation matrix."""
-    n = np.sqrt(qw*qw + qx*qx + qy*qy + qz*qz)
-    if n < 1e-6:
-        return np.eye(3)
-    qw, qx, qy, qz = qw/n, qx/n, qy/n, qz/n
-    return np.array([
-        [1 - 2*(qy*qy + qz*qz),     2*(qx*qy - qz*qw),     2*(qx*qz + qy*qw)],
-        [    2*(qx*qy + qz*qw), 1 - 2*(qx*qx + qz*qz),     2*(qy*qz - qx*qw)],
-        [    2*(qx*qz - qy*qw),     2*(qy*qz + qx*qw), 1 - 2*(qx*qx + qy*qy)],
-    ])
 
 
 # Motor index → MuJoCo joint name (runtime motor order)
@@ -86,11 +77,7 @@ def connect(host, port):
 
 
 def _load_foot_verts(model):
-    """Return {geom_id: Nx3 vertex array} for the two foot collision geoms.
-
-    Vertices are in each geom's local frame; use data.geom_xpos / data.geom_xmat
-    to transform them to world frame after mj_kinematics.
-    """
+    """Return {geom_id: Nx3 vertex array} for the two foot collision geoms."""
     result = {}
     for name in ("left_foot_collision", "right_foot_collision"):
         gid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, name)
@@ -109,14 +96,72 @@ def _min_foot_world_z(data, foot_verts):
     """Minimum world-Z across all foot collision mesh vertices."""
     min_z = np.inf
     for gid, verts in foot_verts.items():
-        pos = data.geom_xpos[gid]          # (3,) geom centre in world
-        mat = data.geom_xmat[gid].reshape(3, 3)  # geom→world rotation (row-major)
-        # z_world = pos[2] + row2(mat) · v  for each vertex v
-        z = pos[2] + mat[2, :] @ verts.T  # (nvert,)
+        pos = data.geom_xpos[gid]
+        mat = data.geom_xmat[gid].reshape(3, 3)
+        z = pos[2] + mat[2, :] @ verts.T
         if z.min() < min_z:
             min_z = float(z.min())
     return min_z
 
+
+# ── Reference square overlay ──────────────────────────────────────────────────
+
+_SQUARE_RGBA  = np.array([1.0, 0.85, 0.0, 0.85], np.float32)
+_SQUARE_Z     = 0.008
+_IDENTITY_MAT = np.eye(3, dtype=np.float64).flatten()
+
+
+def _rot_toward(dx: float, dy: float) -> np.ndarray:
+    length = math.hypot(dx, dy)
+    if length < 1e-6:
+        return np.eye(3, dtype=np.float64)
+    ux, uy = dx / length, dy / length
+    lx = np.array([-uy, ux, 0.0])
+    lz = np.array([ux, uy, 0.0])
+    ly = np.cross(lz, lx)
+    return np.column_stack([lx, ly, lz]).astype(np.float64)
+
+
+def _draw_reference_square(scn, cx: float = 0.0, cy: float = 0.0, half: float = 0.5):
+    """Draw a 1 m × 1 m yellow square centred at (cx, cy) at ground level."""
+    scn.ngeom = 0
+    corners = [
+        (cx - half, cy - half),
+        (cx + half, cy - half),
+        (cx + half, cy + half),
+        (cx - half, cy + half),
+    ]
+    for i in range(4):
+        x0, y0 = corners[i]
+        x1, y1 = corners[(i + 1) % 4]
+        mx, my = (x0 + x1) * 0.5, (y0 + y1) * 0.5
+        seg_half = math.hypot(x1 - x0, y1 - y0) * 0.5
+        if scn.ngeom >= scn.maxgeom:
+            break
+        g = scn.geoms[scn.ngeom]
+        mujoco.mjv_initGeom(
+            g, mujoco.mjtGeom.mjGEOM_CAPSULE,
+            np.array([0.006, seg_half, 0.0], np.float64),
+            np.array([mx, my, _SQUARE_Z], np.float64),
+            _rot_toward(x1 - x0, y1 - y0).flatten(),
+            _SQUARE_RGBA,
+        )
+        scn.ngeom += 1
+    for (cx_, cy_) in corners:
+        if scn.ngeom >= scn.maxgeom:
+            break
+        g = scn.geoms[scn.ngeom]
+        mujoco.mjv_initGeom(
+            g, mujoco.mjtGeom.mjGEOM_SPHERE,
+            np.array([0.015, 0.015, 0.015], np.float64),
+            np.array([cx_, cy_, _SQUARE_Z], np.float64),
+            _IDENTITY_MAT,
+            _SQUARE_RGBA,
+        )
+        scn.ngeom += 1
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Microduck digital twin viewer")
@@ -127,13 +172,8 @@ def main():
         default=os.path.join(_HERE, "scene.xml"),
         help="Path to MuJoCo scene XML (default: fk/scene.xml)",
     )
-    parser.add_argument(
-        "--odometry", action="store_true",
-        help="Compute odometry locally from the stream data (uses Placo FK)",
-    )
     args = parser.parse_args()
 
-    # Load model (scene XML for nicer visuals with floor, lighting, etc.)
     try:
         model = mujoco.MjModel.from_xml_path(args.mjcf)
     except Exception as e:
@@ -141,8 +181,6 @@ def main():
         sys.exit(1)
 
     data = mujoco.MjData(model)
-
-    # Load foot mesh vertices once — used each frame to correct trunk Z via MuJoCo FK
     foot_verts = _load_foot_verts(model)
 
     # Build joint name → qpos index map
@@ -156,27 +194,12 @@ def main():
             continue
         joint_qpos[name] = model.jnt_qposadr[jid]
 
-    # Find the freejoint qpos address for the floating base
     freejoint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "trunk_base_freejoint")
     if freejoint_id < 0:
-        print("Warning: freejoint 'trunk_base_freejoint' not found, base orientation won't be set")
+        print("Warning: freejoint 'trunk_base_freejoint' not found")
         freejoint_qpos_adr = None
     else:
         freejoint_qpos_adr = model.jnt_qposadr[freejoint_id]
-
-    # Local odometry (optional) — runs Placo FK+gravity on the received stream data
-    odo = None
-    if args.odometry:
-        from odometry import MicroduckOdometry
-        odo = MicroduckOdometry()
-        print("Local odometry enabled", flush=True)
-
-    # Seed position from the model's default qpos so the robot appears at the
-    # correct height before odometry kicks in.
-    if freejoint_qpos_adr is not None:
-        odo_pos = list(model.qpos0[freejoint_qpos_adr:freejoint_qpos_adr + 3])
-    else:
-        odo_pos = [0.0, 0.0, 0.0]
 
     sock = connect(args.host, args.port)
 
@@ -191,16 +214,9 @@ def main():
 
             floats = struct.unpack_from(f"<{PACKET_FLOATS}f", raw)
             qw, qx, qy, qz = floats[0], floats[1], floats[2], floats[3]
-            joints   = floats[4:19]   # 15 joint angles
-            currents = floats[19:34]  # 15 motor currents (mA)
-
-            # Update local odometry if enabled (X/Y tracking only — Z comes from MuJoCo)
-            if odo is not None:
-                odo.update(joints, (qw, qx, qy, qz), currents)
-                p = odo.position
-                odo_pos[0] = p[0]
-                odo_pos[1] = p[1]
-                # odo_pos[2] intentionally not updated — computed below via MuJoCo FK
+            joints = floats[4:19]
+            odo_x  = floats[34]
+            odo_y  = floats[35]
 
             # Set joint angles
             for i, name in enumerate(JOINT_NAMES):
@@ -209,26 +225,24 @@ def main():
                 if name in joint_qpos:
                     data.qpos[joint_qpos[name]] = joints[i]
 
-            # Set floating base: orientation from IMU, X/Y from odometry, Z=0 first pass
+            # Set floating base: X/Y from onboard odometry, orientation from IMU
             if freejoint_qpos_adr is not None:
-                # freejoint qpos layout: [x, y, z, qw, qx, qy, qz]
-                data.qpos[freejoint_qpos_adr + 0] = odo_pos[0]
-                data.qpos[freejoint_qpos_adr + 1] = odo_pos[1]
-                data.qpos[freejoint_qpos_adr + 2] = 0.0  # first pass: temp Z
+                data.qpos[freejoint_qpos_adr + 0] = odo_x
+                data.qpos[freejoint_qpos_adr + 1] = odo_y
+                data.qpos[freejoint_qpos_adr + 2] = 0.0   # first pass
                 data.qpos[freejoint_qpos_adr + 3] = qw
                 data.qpos[freejoint_qpos_adr + 4] = qx
                 data.qpos[freejoint_qpos_adr + 5] = qy
                 data.qpos[freejoint_qpos_adr + 6] = qz
 
                 if foot_verts:
-                    # Pass 1: kinematics at Z=0 to find foot sole world height
+                    # Two-pass Z: find how high to lift trunk so lowest foot sits at z=0
                     mujoco.mj_kinematics(model, data)
                     min_z = _min_foot_world_z(data, foot_verts)
-                    # Pass 2: lift trunk so lowest foot vertex is exactly at ground (z=0)
                     data.qpos[freejoint_qpos_adr + 2] = -min_z
 
-            # Final forward kinematics (no physics)
             mujoco.mj_kinematics(model, data)
+            _draw_reference_square(v.user_scn)
             v.sync()
 
     sock.close()

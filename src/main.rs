@@ -287,8 +287,8 @@ struct Args {
     #[arg(long, default_value_t = 0.3)]
     legs_low_pass_alpha: f64,
 
-    /// Stream robot state (joint angles + IMU quaternion) over TCP for digital twin visualization.
-    /// Sends [qw, qx, qy, qz, j0..j14] as 19 × f32 LE (76 bytes/frame) at control loop frequency.
+    /// Stream robot state over TCP for digital twin visualization.
+    /// Sends 36 × f32 LE (144 bytes/frame): [qw,qx,qy,qz] + [j0..j14] + [c0..c14] + [odo_x, odo_y].
     #[arg(long)]
     stream: bool,
 
@@ -1078,7 +1078,11 @@ impl Runtime {
             }
         }
 
-        // Digital twin streaming: send [qw, qx, qy, qz, j0..j14] as 19 × f32 LE
+        // Digital twin streaming: send 36 × f32 LE per frame:
+        //   [0..3]   IMU quaternion [w, x, y, z]
+        //   [4..18]  joint positions (runtime motor order)
+        //   [19..33] motor currents in mA (same order)
+        //   [34..35] odometry x, y in metres (0.0 if no URDF loaded)
         if self.stream_listener.is_some() {
             // Accept a new client if we don't have one
             if self.stream_client.is_none() {
@@ -1094,8 +1098,8 @@ impl Runtime {
             // Send packet to connected client
             if let Some(client) = &mut self.stream_client {
                 let q = imu_data.quat;
-                let mut buf = [0u8; 34 * 4];
-                let floats: [f32; 34] = [
+                let mut buf = [0u8; 36 * 4];
+                let floats: [f32; 36] = [
                     // [0..3]   IMU quaternion [w, x, y, z]
                     q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32,
                     // [4..18]  joint positions (runtime motor order)
@@ -1130,6 +1134,9 @@ impl Runtime {
                     motor_state.currents_ma[12] as f32,
                     motor_state.currents_ma[13] as f32,
                     motor_state.currents_ma[14] as f32,
+                    // [34..35] odometry x, y in metres
+                    self.odometry[0] as f32,
+                    self.odometry[1] as f32,
                 ];
                 for (i, f) in floats.iter().enumerate() {
                     buf[i*4..(i+1)*4].copy_from_slice(&f.to_le_bytes());
