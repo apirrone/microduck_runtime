@@ -259,7 +259,9 @@ impl Odometry {
     fn find_lower(&self, r: &Rotation3<f64>, threshold: f64)
         -> Option<(usize, Vector3<f64>, [f64; 2])>
     {
-        // 4 corners per foot (front/back × left/right).
+        // 4 corners per foot (front/back × left/right) — used only for DETECTION.
+        // When a foot wins, we anchor at its SITE CENTER (not the corner) to avoid
+        // the systematic step-length bias that corner offsets introduce.
         let candidates = [
             (0usize, Vector3::new( FOOT_SOLE_HALF_LEN,  FOOT_SOLE_HALF_WIDTH, 0.0)),
             (0,      Vector3::new( FOOT_SOLE_HALF_LEN, -FOOT_SOLE_HALF_WIDTH, 0.0)),
@@ -272,18 +274,24 @@ impl Odometry {
         ];
 
         let trunk_pos = Vector3::from(self.position);
-        let mut lower_z = threshold;
-        let mut best: Option<(usize, Vector3<f64>, [f64; 2])> = None;
+        let mut lower_z  = threshold;
+        let mut best_chain: Option<usize> = None;
 
         for (chain_idx, local) in candidates {
             let t       = eval_chain(&self.chains[chain_idx], &self.angles);
             let p_trunk = t * Point3::from(local);
             let p_world = trunk_pos + r * p_trunk.coords;
             if p_world[2] < lower_z {
-                lower_z = p_world[2];
-                best    = Some((chain_idx, local, [p_world[0], p_world[1]]));
+                lower_z    = p_world[2];
+                best_chain = Some(chain_idx);
             }
         }
-        best
+
+        // Anchor at the foot-site CENTER, not the detecting corner.
+        best_chain.map(|ci| {
+            let t          = eval_chain(&self.chains[ci], &self.angles);
+            let site_world = trunk_pos + r * t.translation.vector;
+            (ci, Vector3::zeros(), [site_world[0], site_world[1]])
+        })
     }
 }
