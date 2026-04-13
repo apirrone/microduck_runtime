@@ -49,11 +49,16 @@ const FOOT_SOLE_HALF_LEN: f64 = 0.0255;
 /// Derived from foot_tpu_bottom.stl: sole is ~40mm wide → half = 20mm.
 const FOOT_SOLE_HALF_WIDTH: f64 = 0.020;
 
-/// A new contact point must be this many metres BELOW the anchor to take over.
-/// Anchor is always pinned at z=0, so this is an absolute world-Z threshold.
-/// 0.0 = switch to whichever foot is lowest; positive values add hysteresis
-/// but risk the anchor never switching on flat ground (empirically bad).
-const SWITCH_MARGIN: f64 = 0.0;
+/// World-Z threshold for contact switching: switch when a candidate appears
+/// below this height.  Anchor is always pinned at z=0 by apply_support, so
+/// a positive threshold is needed to catch feet that land AT ground level.
+///
+/// On flat ground with reasonable FK, the swing foot lands at z ≈ 0 — it
+/// never dips negative.  A positive threshold (= negative SWITCH_MARGIN)
+/// accepts any foot within SWITCH_MARGIN of the ground as a switch candidate.
+/// 10 mm covers typical FK errors and motor compliance without being so
+/// permissive that both feet compete during double-support.
+const SWITCH_MARGIN: f64 = -0.010;
 
 /// Number of consecutive ticks a candidate must be lower before the anchor
 /// switches.  Prevents single-frame noise spikes from corrupting the estimate.
