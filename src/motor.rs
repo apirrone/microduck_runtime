@@ -66,6 +66,36 @@ pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [
 /// Conversion factor for velocity: 0.229 RPM per count * (2π / 60) for rad/s
 const RADS_PER_SEC_PER_COUNT: f64 = 0.229 * (2.0 * PI / 60.0);
 
+/// Dynamixel Operating Mode register values
+pub const OPERATING_MODE_VELOCITY: u8 = 1;
+pub const OPERATING_MODE_POSITION: u8 = 3;
+
+/// Indices within MOTOR_IDS for the two wheel motors (left_ankle=4, right_ankle=14).
+pub const WHEEL_MOTOR_INDICES: [usize; 2] = [4, 14];
+
+/// Max wheel angular velocity [rad/s] — must match WHEEL_MAX_VEL in the training env.
+pub const WHEEL_MAX_VEL: f64 = 10.0;
+
+/// Default pose for motorized-wheel robot: 12 position-controlled joints.
+/// Excludes wheel indices (4, 14) and mouth index (9).
+/// Order: [left_hip_yaw, left_hip_roll, left_hip_pitch, left_knee,
+///          neck_pitch, head_pitch, head_yaw, head_roll,
+///          right_hip_yaw, right_hip_roll, right_hip_pitch, right_knee]
+pub const DEFAULT_POSITION_MOTORIZED_WHEEL: [f64; 12] = [
+    0.0,     // left_hip_yaw
+    0.0,     // left_hip_roll
+    0.5,     // left_hip_pitch
+    -1.0,    // left_knee
+    -0.3491, // neck_pitch
+    0.3491,  // head_pitch
+    0.0,     // head_yaw
+    0.0,     // head_roll
+    0.0,     // right_hip_yaw
+    0.0,     // right_hip_roll
+    -0.5,    // right_hip_pitch
+    1.0,     // right_knee
+];
+
 /// Motor state containing position, velocity and current
 #[derive(Debug, Clone)]
 pub struct MotorState {
@@ -373,6 +403,88 @@ impl MotorController {
                 .write_position_d_gain(id, kd)
                 .map_err(|e| anyhow::anyhow!("Failed to set D gain for motor {}: {}", id, e))?;
         }
+        Ok(())
+    }
+
+    /// Write the operating_mode EEPROM register for a single motor.
+    /// Torque must be disabled before calling this.
+    pub fn set_operating_mode(&mut self, motor_id: u8, mode: u8) -> Result<()> {
+        self.controller
+            .write_operating_mode(motor_id, mode)
+            .map_err(|e| anyhow::anyhow!("Failed to write operating_mode for motor {}: {}", motor_id, e))?;
+        Ok(())
+    }
+
+    /// Switch the two wheel motors (IDs at WHEEL_MOTOR_INDICES) to velocity control (Op Mode 1).
+    /// Disables torque → writes mode → re-enables torque.
+    pub fn set_wheel_motors_velocity_mode(&mut self) -> Result<()> {
+        let wheel_ids: Vec<u8> = WHEEL_MOTOR_INDICES.iter().map(|&i| MOTOR_IDS[i]).collect();
+        for &id in &wheel_ids {
+            self.controller.write_torque_enable(id, false)
+                .map_err(|e| anyhow::anyhow!("Failed to disable torque for wheel motor {}: {}", id, e))?;
+            self.set_operating_mode(id, OPERATING_MODE_VELOCITY)?;
+            self.controller.write_torque_enable(id, true)
+                .map_err(|e| anyhow::anyhow!("Failed to re-enable torque for wheel motor {}: {}", id, e))?;
+        }
+        Ok(())
+    }
+
+    /// Restore the two wheel motors to position control (Op Mode 3).
+    /// Disables torque → writes mode → re-enables torque.
+    pub fn set_wheel_motors_position_mode(&mut self) -> Result<()> {
+        let wheel_ids: Vec<u8> = WHEEL_MOTOR_INDICES.iter().map(|&i| MOTOR_IDS[i]).collect();
+        for &id in &wheel_ids {
+            self.controller.write_torque_enable(id, false)
+                .map_err(|e| anyhow::anyhow!("Failed to disable torque for wheel motor {}: {}", id, e))?;
+            self.set_operating_mode(id, OPERATING_MODE_POSITION)?;
+            self.controller.write_torque_enable(id, true)
+                .map_err(|e| anyhow::anyhow!("Failed to re-enable torque for wheel motor {}: {}", id, e))?;
+        }
+        Ok(())
+    }
+
+    /// Read present velocities of the two wheel motors only [rad/s].
+    /// Uses a dedicated sync_read_present_velocity on just the two wheel IDs,
+    /// avoiding the full bulk read which can fail in velocity control mode.
+    /// Returns (left_vel_rad_s, right_vel_rad_s).
+    pub fn read_wheel_velocities(&mut self) -> Result<(f64, f64)> {
+        let wheel_ids = [MOTOR_IDS[WHEEL_MOTOR_INDICES[0]], MOTOR_IDS[WHEEL_MOTOR_INDICES[1]]];
+        let raw = self.controller
+            .sync_read_present_velocity(&wheel_ids)
+            .map_err(|e| anyhow::anyhow!("Failed to read wheel velocities: {}", e))?;
+        Ok((
+            convert_velocity(raw[0] as f64),
+            convert_velocity(raw[1] as f64),
+        ))
+    }
+
+    /// Write goal velocities to the two wheel motors.
+    /// `left_vel_rad_s` and `right_vel_rad_s` are in rad/s.
+    pub fn write_wheel_velocities(&mut self, left_vel_rad_s: f64, right_vel_rad_s: f64) -> Result<()> {
+        let left_id  = MOTOR_IDS[WHEEL_MOTOR_INDICES[0]];
+        let right_id = MOTOR_IDS[WHEEL_MOTOR_INDICES[1]];
+        let left_raw  = (left_vel_rad_s  / RADS_PER_SEC_PER_COUNT).round() as i32;
+        let right_raw = (right_vel_rad_s / RADS_PER_SEC_PER_COUNT).round() as i32;
+        self.controller
+            .sync_write_goal_velocity(&[left_id, right_id], &[left_raw, right_raw])
+            .map_err(|e| anyhow::anyhow!("Failed to write wheel velocities: {}", e))?;
+        Ok(())
+    }
+
+    /// Write goal positions to all motors except the two wheel motors.
+    /// `positions` is the full NUM_MOTORS array; wheel indices are skipped.
+    pub fn write_goal_positions_no_wheels(&mut self, positions: &[f64; NUM_MOTORS]) -> Result<()> {
+        let mut ids: Vec<u8>  = Vec::with_capacity(NUM_MOTORS - WHEEL_MOTOR_INDICES.len());
+        let mut pos: Vec<f64> = Vec::with_capacity(NUM_MOTORS - WHEEL_MOTOR_INDICES.len());
+        for i in 0..NUM_MOTORS {
+            if !WHEEL_MOTOR_INDICES.contains(&i) {
+                ids.push(MOTOR_IDS[i]);
+                pos.push(positions[i]);
+            }
+        }
+        self.controller
+            .sync_write_goal_position(&ids, &pos)
+            .map_err(|e| anyhow::anyhow!("Failed to write goal positions (no wheels): {}", e))?;
         Ok(())
     }
 }

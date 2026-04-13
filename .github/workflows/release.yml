@@ -65,6 +65,7 @@ jobs:
           cp target/aarch64-unknown-linux-gnu/release/check_voltage dist/
           cp target/aarch64-unknown-linux-gnu/release/microduck_help dist/
           cp target/aarch64-unknown-linux-gnu/release/debug_bno08x dist/
+          cp target/aarch64-unknown-linux-gnu/release/wheel_sysid dist/
           # Copy policies (preserving symlinks)
           cp -a policies dist/
           # Copy systemd service file
@@ -74,7 +75,7 @@ jobs:
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw calibrate_imu test_controller init em check_voltage microduck_help debug_bno08x policies microduck_runtime.service robot.urdf libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw calibrate_imu test_controller init em check_voltage microduck_help debug_bno08x wheel_sysid policies microduck_runtime.service robot.urdf libonnxruntime.so*
           cd ..
 
       - name: Create Release
@@ -105,6 +106,7 @@ jobs:
             - **check_voltage**: Read present input voltage for all motors
             - **microduck_help**: List all available commands
             - **debug_bno08x**: BNO08X SHTP raw packet debugger
+            - **wheel_sysid**: Wheel motor system identification (step response characterisation)
             - **policies/**: Bundled ONNX policy models
             - **libonnxruntime.so**: ONNX Runtime library
         env:
