@@ -5,7 +5,7 @@
 //! and publishes each complete frame into a shared buffer.
 //! The main thread takes frames out of the buffer whenever it is ready to send.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::io::Read;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -45,19 +45,29 @@ impl CameraStream {
 // ── capture loop ─────────────────────────────────────────────────────────────
 
 fn capture_loop(width: u32, height: u32, fps: u32, buf: FrameBuffer) -> Result<()> {
-    let mut child: Child = Command::new("libcamera-vid")
-        .args([
-            "--codec",     "mjpeg",
-            "--output",    "-",
-            "--width",     &width.to_string(),
-            "--height",    &height.to_string(),
-            "--framerate", &fps.to_string(),
-            "--nopreview",
-            "--timeout",   "0",   // run indefinitely
-        ])
+    // On Pi OS Bookworm the binary is rpicam-vid; libcamera-vid is a compat symlink.
+    // Try rpicam-vid first, fall back to libcamera-vid.
+    let binary = if std::process::Command::new("which")
+        .arg("rpicam-vid").output()
+        .map(|o| o.status.success()).unwrap_or(false)
+    {
+        "rpicam-vid"
+    } else {
+        "libcamera-vid"
+    };
+
+    let w = width.to_string();
+    let h = height.to_string();
+    let f = fps.to_string();
+
+    let mut child: Child = Command::new(binary)
+        .args(["--codec", "mjpeg", "--output", "-",
+               "--width", &w, "--height", &h, "--framerate", &f,
+               "--nopreview", "--timeout", "0"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .spawn()?;
+        .spawn()
+        .with_context(|| format!("Failed to spawn {binary}"))?;
 
     let mut stdout = child.stdout.take()
         .ok_or_else(|| anyhow::anyhow!("libcamera-vid produced no stdout"))?;
