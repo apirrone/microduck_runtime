@@ -4,6 +4,7 @@ mod observation;
 mod policy;
 mod controller;
 mod odometry;
+mod camera;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -15,7 +16,8 @@ use policy::Policy;
 use controller::Controller;
 use serde::Serialize;
 use std::fs::File;
-use std::io::Write as IoWrite;
+use std::io::{Read as IoRead, Write as IoWrite};
+use std::net::UdpSocket;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Timestamped observation for recording
@@ -296,6 +298,26 @@ struct Args {
     #[arg(long, default_value_t = 9870)]
     stream_port: u16,
 
+    /// TCP port for JPEG camera stream sent to the brain (default: 9871, requires --stream)
+    #[arg(long, default_value_t = 9871)]
+    jpeg_port: u16,
+
+    /// UDP port for velocity commands received from the brain (default: 9872, requires --stream)
+    #[arg(long, default_value_t = 9872)]
+    cmd_port: u16,
+
+    /// Camera capture width in pixels (default: 640)
+    #[arg(long, default_value_t = 640u32)]
+    cam_width: u32,
+
+    /// Camera capture height in pixels (default: 480)
+    #[arg(long, default_value_t = 480u32)]
+    cam_height: u32,
+
+    /// Camera capture framerate (default: 5 Hz)
+    #[arg(long, default_value_t = 5u32)]
+    cam_fps: u32,
+
 }
 
 
@@ -389,6 +411,15 @@ struct Runtime {
     // Digital twin TCP stream
     stream_listener: Option<std::net::TcpListener>,
     stream_client: Option<std::net::TcpStream>,
+    // Brain JPEG stream (port 9871): camera frames pushed to a connected client
+    jpeg_listener: Option<std::net::TcpListener>,
+    jpeg_client: Option<std::net::TcpStream>,
+    // Brain command socket (port 9872): UDP, receives [vx,vy,wz] as 3×f32 LE
+    cmd_socket: Option<UdpSocket>,
+    // Background camera capture thread
+    camera_stream: Option<camera::CameraStream>,
+    // Latest velocity command received from the brain (applied when gamepad is idle)
+    brain_command: [f64; 3],
     // Inline odometry engine (None if no URDF provided)
     odometry_engine: Option<odometry::Odometry>,
     /// Latest odometry estimate [x, y, z, yaw] in world frame (metres / radians)
@@ -684,6 +715,37 @@ impl Runtime {
                 None
             },
             stream_client: None,
+            jpeg_listener: if args.stream {
+                let addr = format!("0.0.0.0:{}", args.jpeg_port);
+                let listener = std::net::TcpListener::bind(&addr)
+                    .with_context(|| format!("Failed to bind JPEG listener on {}", addr))?;
+                listener.set_nonblocking(true)
+                    .context("Failed to set JPEG listener non-blocking")?;
+                println!("JPEG stream listening on TCP port {}", args.jpeg_port);
+                Some(listener)
+            } else {
+                None
+            },
+            jpeg_client: None,
+            cmd_socket: if args.stream {
+                let addr = format!("0.0.0.0:{}", args.cmd_port);
+                let sock = UdpSocket::bind(&addr)
+                    .with_context(|| format!("Failed to bind UDP command socket on {}", addr))?;
+                sock.set_nonblocking(true)
+                    .context("Failed to set command socket non-blocking")?;
+                println!("UDP command socket listening on port {}", args.cmd_port);
+                Some(sock)
+            } else {
+                None
+            },
+            camera_stream: if args.stream {
+                println!("Starting camera capture ({}×{} @ {} fps) …",
+                    args.cam_width, args.cam_height, args.cam_fps);
+                Some(camera::CameraStream::start(args.cam_width, args.cam_height, args.cam_fps))
+            } else {
+                None
+            },
+            brain_command: [0.0; 3],
             odometry_engine: if args.stream {
                 println!("Odometry initialized (MJCF hardcoded chains)");
                 Some(odometry::Odometry::new())
@@ -916,11 +978,18 @@ impl Runtime {
                 // - Left stick Y (left/right) → vel_y strafe
                 // - Right stick Y (left/right) → vel_z turn
                 // EMA smoothing: cmd += alpha * (target - cmd)
-                let target_cmd = [
+                let gamepad_target = [
                     left_x as f64 * self.max_linear_vel,
                     -left_y as f64 * self.max_linear_vel,
                     -right_y as f64 * 1.5 * self.max_angular_vel,
                 ];
+                // Brain command active when all gamepad sticks are at deadzone (== 0.0)
+                let gamepad_idle = left_x == 0.0 && left_y == 0.0 && right_y == 0.0;
+                let target_cmd = if gamepad_idle && !self.ground_pick_active && !self.jump_active {
+                    self.brain_command
+                } else {
+                    gamepad_target
+                };
                 for i in 0..3 {
                     self.command[i] += self.cmd_alpha * (target_cmd[i] - self.command[i]);
                 }
@@ -1127,6 +1196,52 @@ impl Runtime {
                 if client.write_all(&buf).is_err() {
                     println!("Digital twin client disconnected");
                     self.stream_client = None;
+                }
+            }
+        }
+
+        // ── Brain JPEG stream (port 9871) ─────────────────────────────────────
+        if let Some(ref listener) = self.jpeg_listener {
+            if self.jpeg_client.is_none() {
+                if let Ok((stream, addr)) = listener.accept() {
+                    let _ = stream.set_nodelay(true);
+                    println!("Brain JPEG client connected: {}", addr);
+                    self.jpeg_client = Some(stream);
+                }
+            }
+        }
+        if self.jpeg_client.is_some() {
+            if let Some(ref cam) = self.camera_stream {
+                // Consume the latest frame (None = no new frame since last send)
+                let frame = cam.latest_frame.lock().unwrap().take();
+                if let Some(jpeg) = frame {
+                    let len_bytes = (jpeg.len() as u32).to_le_bytes();
+                    let ok = self.jpeg_client.as_mut().map(|c| {
+                        c.write_all(&len_bytes).is_ok() && c.write_all(&jpeg).is_ok()
+                    }).unwrap_or(false);
+                    if !ok {
+                        println!("Brain JPEG client disconnected");
+                        self.jpeg_client = None;
+                    }
+                }
+            }
+        }
+
+        // ── Brain UDP command socket (port 9872) ──────────────────────────────
+        // Drain all pending datagrams — only the last one matters.
+        if let Some(ref sock) = self.cmd_socket {
+            let mut buf = [0u8; 12]; // 3 × f32
+            loop {
+                match sock.recv(&mut buf) {
+                    Ok(12) => {
+                        let vx = f32::from_le_bytes(buf[0..4].try_into().unwrap()) as f64;
+                        let vy = f32::from_le_bytes(buf[4..8].try_into().unwrap()) as f64;
+                        let wz = f32::from_le_bytes(buf[8..12].try_into().unwrap()) as f64;
+                        self.brain_command = [vx, vy, wz];
+                    }
+                    Ok(_) => {}  // wrong size, ignore
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(_) => break,
                 }
             }
         }
