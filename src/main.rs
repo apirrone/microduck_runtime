@@ -496,6 +496,14 @@ impl Runtime {
             ]);
         }
 
+        // Fold robot: IMU is rotated 90° around Y → x+=up, so world gravity is [-1, 0, 0]
+        // This only matters for quaternion-based projected gravity (--projected-gravity / BNO08X / BMI088).
+        // Raw accelerometer mode (BNO055 default) is correct without this change.
+        if args.fold {
+            imu_controller.set_world_gravity([-1.0, 0.0, 0.0]);
+            println!("✓ Fold mode: world gravity set to [-1, 0, 0] (x+=up)");
+        }
+
         // Initialize policy based on arguments
         let mut policy = if args.dummy {
             println!("✓ Using dummy policy (always outputs zeros)");
@@ -1133,19 +1141,21 @@ impl Runtime {
             }
         }
 
-        // Fall detection: accel is projected gravity from quaternion (no walking dynamics).
-        // When upright accel[2] ≈ -1.0; above -0.5 means >60° tilt.
+        // Fall detection: accel is projected gravity (unit vector, body frame).
+        // Standard microduck: z+ = up → upright means accel[2] ≈ -1.0.
+        // Fold robot IMU: x+ = up → upright means accel[0] ≈ -1.0.
         // Debounce: only trigger after 0.2s of continuous detection.
+        let upright_axis = if self.fold_mode { 0 } else { 2 };
         if self.battery_benchmark {
             // Benchmark fall detection: auto-recover via standing policy (command → 0)
             if self.benchmark_recovering {
-                if imu_data.accel[2] < -0.5 {
+                if imu_data.accel[upright_axis] < -0.5 {
                     // Robot is upright again: resume benchmark walking
                     self.benchmark_recovering = false;
                     self.fall_detected_since = None;
                     println!("▶ Benchmark: upright, resuming walk");
                 }
-            } else if imu_data.accel[2] > -0.5 {
+            } else if imu_data.accel[upright_axis] > -0.5 {
                 let since = self.fall_detected_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= Duration::from_millis(200) {
                     self.benchmark_recovering = true;
@@ -1157,7 +1167,7 @@ impl Runtime {
             }
         } else if !self.has_standing_policy && !self.fallen {
             // Standard fall detection: skipped when a standing policy is provided.
-            if imu_data.accel[2] > -0.5 {
+            if imu_data.accel[upright_axis] > -0.5 {
                 let since = self.fall_detected_since.get_or_insert_with(Instant::now);
                 if since.elapsed() >= Duration::from_millis(200) {
                     self.fallen = true;

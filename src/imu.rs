@@ -125,6 +125,9 @@ pub struct ImuController {
     gravity_offset: [f64; 3],
     /// Use projected gravity from quaternion (true) or raw accelerometer (false)
     use_projected_gravity: bool,
+    /// World-frame gravity unit vector used for quaternion-based projected gravity.
+    /// Standard robot (z+=up): [0, 0, -1]. Fold robot (x+=up): [-1, 0, 0].
+    world_gravity: [f64; 3],
     /// Last 2 raw gyro readings for 3-sample median filter (spike rejection)
     gyro_history: [[f64; 3]; 2],
     /// Last 2 raw accel readings for 3-sample median filter (spike rejection)
@@ -183,6 +186,7 @@ impl ImuController {
             delay,
             gravity_offset: [0.0; 3],  // No offset by default
             use_projected_gravity,
+            world_gravity: [0.0, 0.0, -1.0],
             gyro_history: [[0.0; 3]; 2],
             accel_history: [[0.0; 3]; 2],
         };
@@ -288,6 +292,12 @@ impl ImuController {
         self.gravity_offset
     }
 
+    /// Set the world-frame gravity unit vector used for quaternion-based projected gravity.
+    /// Default: [0, 0, -1] (z+=up, standard microduck). Fold robot: [-1, 0, 0] (x+=up).
+    pub fn set_world_gravity(&mut self, g: [f64; 3]) {
+        self.world_gravity = g;
+    }
+
     /// Read current IMU data
     /// Returns gyroscope (rad/s) and normalized projected gravity (unit vector)
     /// Projected gravity can come from either:
@@ -331,8 +341,7 @@ impl ImuController {
             // Compute projected gravity by rotating world-frame gravity into body frame
             // World gravity: [0, 0, -1.0] unit vector pointing downward
             // Use inverse rotation to transform from world frame to body frame
-            let world_gravity = [0.0, 0.0, -1.0];
-            let proj_grav_unit = quat_rotate_vec_inverse(quat, world_gravity);
+            let proj_grav_unit = quat_rotate_vec_inverse(quat, self.world_gravity);
 
             // Already a unit vector (or very close), but normalize to be safe
             let mag = (proj_grav_unit[0].powi(2) + proj_grav_unit[1].powi(2) + proj_grav_unit[2].powi(2)).sqrt();
@@ -343,7 +352,7 @@ impl ImuController {
                     proj_grav_unit[2] / mag,
                 ]
             } else {
-                [0.0, 0.0, -1.0] // Default to downward unit vector if magnitude is too small
+                self.world_gravity // Fall back to world gravity direction if magnitude too small
             }
         } else {
             // Mode 2: Raw accelerometer (default, includes dynamic accelerations)
@@ -652,6 +661,7 @@ pub struct Bno08xController {
     shared: Arc<Mutex<Bno08xState>>,
     stop_flag: Arc<AtomicBool>,
     gravity_offset: [f64; 3],
+    world_gravity: [f64; 3],
     gyro_history: [[f64; 3]; 2],
     accel_history: [[f64; 3]; 2],
     _thread: thread::JoinHandle<()>,
@@ -695,6 +705,7 @@ impl Bno08xController {
             shared,
             stop_flag,
             gravity_offset: [0.0; 3],
+            world_gravity: [0.0, 0.0, -1.0],
             gyro_history: [[0.0; 3]; 2],
             accel_history: [[0.0; 3]; 2],
             _thread: thread_handle,
@@ -708,6 +719,10 @@ impl Bno08xController {
 
     pub fn get_gravity_offset(&self) -> [f64; 3] {
         self.gravity_offset
+    }
+
+    pub fn set_world_gravity(&mut self, g: [f64; 3]) {
+        self.world_gravity = g;
     }
 
     /// Returns the latest sensor data. Never blocks on I2C — the background thread
@@ -729,8 +744,7 @@ impl Bno08xController {
         self.gyro_history[0] = self.gyro_history[1];
         self.gyro_history[1] = gyro_raw;
 
-        let world_gravity = [0.0, 0.0, -1.0];
-        let grav_sensor = quat_rotate_vec_inverse(last_quat, world_gravity);
+        let grav_sensor = quat_rotate_vec_inverse(last_quat, self.world_gravity);
         let grav_robot = [grav_sensor[0], grav_sensor[1], grav_sensor[2]];
         let accel_final = finalize_gravity(grav_robot, self.gravity_offset);
 
@@ -759,6 +773,7 @@ impl Bno08xController {
 pub struct Bmi088Controller {
     ahrs: Bmi088Ahrs<I2cdev>,
     gravity_offset: [f64; 3],
+    world_gravity: [f64; 3],
     last_read: std::time::Instant,
     gyro_history: [[f64; 3]; 2],
     accel_history: [[f64; 3]; 2],
@@ -788,6 +803,7 @@ impl Bmi088Controller {
         Ok(Self {
             ahrs,
             gravity_offset: [0.0; 3],
+            world_gravity: [0.0, 0.0, -1.0],
             last_read: std::time::Instant::now(),
             gyro_history: [[0.0; 3]; 2],
             accel_history: [[0.0; 3]; 2],
@@ -801,6 +817,10 @@ impl Bmi088Controller {
 
     pub fn get_gravity_offset(&self) -> [f64; 3] {
         self.gravity_offset
+    }
+
+    pub fn set_world_gravity(&mut self, g: [f64; 3]) {
+        self.world_gravity = g;
     }
 
     pub fn read(&mut self) -> Result<ImuData> {
@@ -824,8 +844,7 @@ impl Bmi088Controller {
         ];
 
         // Madgwick quaternion is body→world; apply inverse to project world gravity into body frame
-        let world_gravity = [0.0, 0.0, -1.0];
-        let accel_raw = quat_rotate_vec_inverse(quat, world_gravity);
+        let accel_raw = quat_rotate_vec_inverse(quat, self.world_gravity);
         let accel_final = finalize_gravity(accel_raw, self.gravity_offset);
 
         let gyro_filtered = [
@@ -871,6 +890,14 @@ impl AnyImuController {
             AnyImuController::Bno055(c) => c.set_gravity_offset(offset),
             AnyImuController::Bno08x(c) => c.set_gravity_offset(offset),
             AnyImuController::Bmi088(c) => c.set_gravity_offset(offset),
+        }
+    }
+
+    pub fn set_world_gravity(&mut self, g: [f64; 3]) {
+        match self {
+            AnyImuController::Bno055(c) => c.set_world_gravity(g),
+            AnyImuController::Bno08x(c) => c.set_world_gravity(g),
+            AnyImuController::Bmi088(c) => c.set_world_gravity(g),
         }
     }
 
