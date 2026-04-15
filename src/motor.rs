@@ -71,7 +71,7 @@ pub const FOLD_DEFAULT_POSITION: [f64; NUM_MOTORS] = [
     -0.1745, // left_hip_roll
     -0.5236, // left_hip_pitch
     0.0,     // left_knee
-    0.5236,  // left_ankle
+    -0.5236, // left_ankle
 
     -0.5236, // neck_pitch
     0.5236,  // head_pitch
@@ -83,7 +83,7 @@ pub const FOLD_DEFAULT_POSITION: [f64; NUM_MOTORS] = [
     0.1745,  // right_hip_roll
     0.5236,  // right_hip_pitch
     0.0,     // right_knee
-    -0.5236, // right_ankle
+    0.5236,  // right_ankle
 ];
 
 /// Conversion factor for velocity: 0.229 RPM per count * (2π / 60) for rad/s
