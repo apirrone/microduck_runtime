@@ -63,6 +63,29 @@ pub const DEFAULT_POSITION: [f64; NUM_MOTORS] = [
     -0.6, // right_ankle
 ];
 
+/// Default position for the fold robot (STAND keyframe from fold/scene_fold.xml).
+/// Motor order: left leg (5), neck/head/mouth (5), right leg (5).
+/// Matches HOME_FRAME in fold_constants.py.
+pub const FOLD_DEFAULT_POSITION: [f64; NUM_MOTORS] = [
+    0.0,     // left_hip_yaw
+    0.1745,  // left_hip_roll
+    0.5236,  // left_hip_pitch
+    0.0,     // left_knee
+    -0.5236, // left_ankle
+
+    0.5236,  // neck_pitch      (override via --neck-pitch-default)
+    -0.5236, // head_pitch      (override via --head-pitch-default)
+    0.0,     // head_yaw
+    0.0,     // head_roll
+    0.0,     // mouth_motor (unused in fold policy)
+
+    0.0,     // right_hip_yaw
+    -0.1745, // right_hip_roll
+    -0.5236, // right_hip_pitch
+    0.0,     // right_knee
+    0.5236,  // right_ankle
+];
+
 /// Conversion factor for velocity: 0.229 RPM per count * (2π / 60) for rad/s
 const RADS_PER_SEC_PER_COUNT: f64 = 0.229 * (2.0 * PI / 60.0);
 
@@ -118,6 +141,8 @@ impl Default for MotorState {
 /// Motor controller for XL330 servos
 pub struct MotorController {
     controller: Xl330Controller,
+    /// Whether motor 34 (mouth) responded at startup; false = skip it everywhere
+    pub mouth_present: bool,
 }
 
 impl MotorController {
@@ -136,7 +161,24 @@ impl MotorController {
             .with_protocol_v2()
             .with_serial_port(serial_port);
 
-        Ok(Self { controller })
+        let mut mc = Self { controller, mouth_present: true };
+        // Probe motor 34 — if it doesn't respond it's absent; swallow the error
+        match mc.controller.sync_read_present_position(&[MOUTH_MOTOR_ID]) {
+            Ok(_) => println!("✓ Mouth motor (ID 34) present"),
+            Err(_) => {
+                mc.mouth_present = false;
+                println!("⚠  Mouth motor (ID 34) not found — skipping in all motor operations");
+            }
+        }
+        Ok(mc)
+    }
+
+    /// Returns (full_index, motor_id) pairs for all active motors.
+    /// When mouth_present=false, motor 34 (index MOUTH_MOTOR_IDX) is excluded.
+    fn active_motors(&self) -> Vec<(usize, u8)> {
+        MOTOR_IDS.iter().copied().enumerate()
+            .filter(|&(i, id)| self.mouth_present || id != MOUTH_MOTOR_ID)
+            .collect()
     }
 
     /// Read current state of all motors (position and velocity)
@@ -160,35 +202,35 @@ impl MotorController {
         const CURRENT_ADDR: u8 = 126;
         const READ_LENGTH: u8 = 10; // 2 bytes current + 4 bytes velocity + 4 bytes position
 
+        let active = self.active_motors();
+        let ids: Vec<u8> = active.iter().map(|&(_, id)| id).collect();
+
         let raw_data = self.controller
-            .sync_read_raw_data(&MOTOR_IDS, CURRENT_ADDR, READ_LENGTH)
+            .sync_read_raw_data(&ids, CURRENT_ADDR, READ_LENGTH)
             .map_err(|e| anyhow::anyhow!("Failed to bulk read motor state (addr {}, len {}): {}",
                 CURRENT_ADDR, READ_LENGTH, e))?;
 
-        // Validate we got data for all motors
-        if raw_data.len() != MOTOR_IDS.len() {
+        if raw_data.len() != active.len() {
             return Err(anyhow::anyhow!("Incomplete motor data: expected {} motors, got {}",
-                MOTOR_IDS.len(), raw_data.len()));
+                active.len(), raw_data.len()));
         }
 
-        // Parse the 10-byte response for each motor
-        for (i, motor_data) in raw_data.iter().enumerate() {
+        // Parse each motor's 10-byte block; j = active index, i = full-array index
+        for (j, motor_data) in raw_data.iter().enumerate() {
+            let (i, motor_id) = active[j];
             if motor_data.len() != 10 {
                 return Err(anyhow::anyhow!("Invalid data length for motor {} (ID {}): expected 10 bytes, got {}",
-                    i, MOTOR_IDS[i], motor_data.len()));
+                    i, motor_id, motor_data.len()));
             }
 
-            // Extract current (first 2 bytes) as i16, convert to absolute mA
             let raw_current = i16::from_le_bytes([motor_data[0], motor_data[1]]);
             state.currents_ma[i] = (raw_current as f64).abs();
 
-            // Extract velocity (next 4 bytes) as i32
             let raw_velocity = i32::from_le_bytes([
                 motor_data[2], motor_data[3], motor_data[4], motor_data[5]
             ]);
             state.velocities[i] = convert_velocity(raw_velocity as f64);
 
-            // Extract position (last 4 bytes) as i32 and convert to radians
             let raw_position = i32::from_le_bytes([
                 motor_data[6], motor_data[7], motor_data[8], motor_data[9]
             ]);
@@ -202,27 +244,28 @@ impl MotorController {
     /// Uses three separate sync_read operations
     fn read_state_separate(&mut self) -> Result<MotorState> {
         let mut state = MotorState::default();
+        let active = self.active_motors();
+        let ids: Vec<u8> = active.iter().map(|&(_, id)| id).collect();
 
-        // Sync read present position (in radians)
         let positions = self.controller
-            .sync_read_present_position(&MOTOR_IDS)
+            .sync_read_present_position(&ids)
             .map_err(|e| anyhow::anyhow!("Failed to read positions: {}", e))?;
-        state.positions.copy_from_slice(&positions);
-
-        // Sync read present velocity (raw values need conversion)
-        let raw_velocities = self.controller
-            .sync_read_present_velocity(&MOTOR_IDS)
-            .map_err(|e| anyhow::anyhow!("Failed to read velocities: {}", e))?;
-        for (i, &raw_vel) in raw_velocities.iter().enumerate() {
-            state.velocities[i] = convert_velocity(raw_vel as f64);
+        for (j, &pos) in positions.iter().enumerate() {
+            state.positions[active[j].0] = pos;
         }
 
-        // Sync read present current (in mA, absolute value)
+        let raw_velocities = self.controller
+            .sync_read_present_velocity(&ids)
+            .map_err(|e| anyhow::anyhow!("Failed to read velocities: {}", e))?;
+        for (j, &raw_vel) in raw_velocities.iter().enumerate() {
+            state.velocities[active[j].0] = convert_velocity(raw_vel as f64);
+        }
+
         let raw_currents = self.controller
-            .sync_read_present_current(&MOTOR_IDS)
+            .sync_read_present_current(&ids)
             .map_err(|e| anyhow::anyhow!("Failed to read currents: {}", e))?;
-        for (i, &c) in raw_currents.iter().enumerate() {
-            state.currents_ma[i] = (c as f64).abs();
+        for (j, &c) in raw_currents.iter().enumerate() {
+            state.currents_ma[active[j].0] = (c as f64).abs();
         }
 
         Ok(state)
@@ -238,7 +281,7 @@ impl MotorController {
 
     /// Enable or disable torque for all motors
     pub fn set_torque_enable(&mut self, enable: bool) -> Result<()> {
-        for &id in &MOTOR_IDS {
+        for &(_, id) in &self.active_motors() {
             self.controller
                 .write_torque_enable(id, enable)
                 .map_err(|e| anyhow::anyhow!("Failed to set torque for motor {}: {}", id, e))?;
@@ -248,34 +291,37 @@ impl MotorController {
 
     /// Read current from all motors.
     /// Returns (left_leg_mA, right_leg_mA, total_all_motors_mA).
-    /// left/right only sum leg motors (indices 0-4 and 9-13); total sums all 14.
+    /// left/right only sum leg motors (indices 0-4 and 10-14); total sums all active motors.
     pub fn read_leg_currents(&mut self) -> Result<(f64, f64, f64)> {
-        // Sync read present current (in mA)
-        let currents = self.controller
-            .sync_read_present_current(&MOTOR_IDS)
+        let active = self.active_motors();
+        let ids: Vec<u8> = active.iter().map(|&(_, id)| id).collect();
+        let raw = self.controller
+            .sync_read_present_current(&ids)
             .map_err(|e| anyhow::anyhow!("Failed to read currents: {}", e))?;
 
-        // Sum left leg currents (indices 0-4: IDs 20-24)
-        let left_leg_current: f64 = currents[0..5].iter().map(|&c| (c as f64).abs()).sum();
+        let mut currents_ma = [0.0f64; NUM_MOTORS];
+        for (j, &c) in raw.iter().enumerate() {
+            currents_ma[active[j].0] = (c as f64).abs();
+        }
 
-        // Sum right leg currents (indices 9-13: IDs 10-14)
-        let right_leg_current: f64 = currents[9..14].iter().map(|&c| (c as f64).abs()).sum();
-
-        // Sum all 14 body motors
-        let total_current: f64 = currents.iter().map(|&c| (c as f64).abs()).sum();
+        let left_leg_current:  f64 = currents_ma[0..5].iter().sum();
+        let right_leg_current: f64 = currents_ma[10..15].iter().sum();
+        let total_current:     f64 = currents_ma.iter().sum();
 
         Ok((left_leg_current, right_leg_current, total_current))
     }
 
     /// Read present input voltage for all motors (in Volts)
     pub fn read_voltages(&mut self) -> Result<[f32; NUM_MOTORS]> {
+        let active = self.active_motors();
+        let ids: Vec<u8> = active.iter().map(|&(_, id)| id).collect();
         let raw = self.controller
-            .sync_read_present_input_voltage(&MOTOR_IDS)
+            .sync_read_present_input_voltage(&ids)
             .map_err(|e| anyhow::anyhow!("Failed to read voltages: {}", e))?;
 
         let mut voltages = [0.0f32; NUM_MOTORS];
-        for (i, &v) in raw.iter().enumerate() {
-            voltages[i] = v as f32 * 0.1;
+        for (j, &v) in raw.iter().enumerate() {
+            voltages[active[j].0] = v as f32 * 0.1;
         }
         Ok(voltages)
     }
@@ -283,6 +329,12 @@ impl MotorController {
     /// Smoothly interpolate all motors from their current positions to DEFAULT_POSITION.
     /// Reads current positions once, then linearly interpolates over `duration` at 50 Hz.
     pub fn interpolate_to_default(&mut self, duration: Duration) -> Result<()> {
+        self.interpolate_to_position(&DEFAULT_POSITION, duration)
+    }
+
+    /// Smoothly interpolate all motors from their current positions to a given target.
+    /// Reads current positions once, then linearly interpolates over `duration` at 50 Hz.
+    pub fn interpolate_to_position(&mut self, target: &[f64; NUM_MOTORS], duration: Duration) -> Result<()> {
         let steps = (duration.as_secs_f64() * 50.0).round() as u64;
         let dt = Duration::from_millis(20);
 
@@ -295,7 +347,7 @@ impl MotorController {
             let t = step as f64 / steps as f64;
             let mut targets = [0.0f64; NUM_MOTORS];
             for i in 0..NUM_MOTORS {
-                targets[i] = start[i] + t * (DEFAULT_POSITION[i] - start[i]);
+                targets[i] = start[i] + t * (target[i] - start[i]);
             }
             self.write_goal_positions(&targets)
                 .context("Failed to write interpolated positions")?;
@@ -320,7 +372,8 @@ impl MotorController {
     pub fn check_and_fix_config(&mut self) -> Result<()> {
         let mut total_fixes = 0usize;
 
-        for &id in MOTOR_IDS.iter() {
+        let active_ids: Vec<u8> = self.active_motors().into_iter().map(|(_, id)| id).collect();
+        for id in active_ids {
             total_fixes += self.check_and_fix_motor_config(id)
                 .map_err(|e| anyhow::anyhow!("Motor {}: {}", id, e))?;
         }
@@ -392,7 +445,7 @@ impl MotorController {
 
     /// Set PID gains for all motors
     pub fn set_pid_gains(&mut self, kp: u16, ki: u16, kd: u16) -> Result<()> {
-        for &id in &MOTOR_IDS {
+        for &(_, id) in &self.active_motors() {
             self.controller
                 .write_position_p_gain(id, kp)
                 .map_err(|e| anyhow::anyhow!("Failed to set P gain for motor {}: {}", id, e))?;

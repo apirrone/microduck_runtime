@@ -9,7 +9,7 @@ mod camera;
 use anyhow::{Context, Result};
 use clap::Parser;
 use imu::{ImuController, Bno08xController, Bmi088Controller, AnyImuController};
-use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, MOUTH_MOTOR_IDX, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE,
+use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, FOLD_DEFAULT_POSITION, MOUTH_MOTOR_IDX, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE,
             DEFAULT_POSITION_MOTORIZED_WHEEL, WHEEL_MOTOR_INDICES, WHEEL_MAX_VEL, OPERATING_MODE_POSITION};
 use observation::Observation;
 use policy::Policy;
@@ -210,6 +210,23 @@ struct Args {
     #[arg(long)]
     roller: bool,
 
+    /// Fold robot mode: use fold robot STAND default pose, continuous fold/unfold phase cycling.
+    /// B button toggles fold cycling. Command becomes [cos(2π·φ), sin(2π·φ), 0].
+    #[arg(long)]
+    fold: bool,
+
+    /// Path to fold/unfold policy ONNX file (required with --fold)
+    #[arg(long)]
+    fold_policy: Option<String>,
+
+    /// Duration of one fold/unfold cycle in seconds (default: 6.0)
+    #[arg(long, default_value_t = 6.0)]
+    fold_period: f64,
+
+    /// Action scale for fold policy (default: 1.0)
+    #[arg(long, default_value_t = 1.0)]
+    fold_action_scale: f64,
+
     /// Motorized wheel mode: ankle motors use velocity control (Operating Mode 1).
     /// Observation is 49D (no wheel joint_pos, no mouth). Never switches to standing policy.
     #[arg(long)]
@@ -383,6 +400,12 @@ struct Runtime {
     current_sum: f64,
     current_count: u64,
     current_peak: f64,
+    // Fold robot mode
+    fold_mode: bool,
+    fold_active: bool,      // true = phase cycling (folding/unfolding)
+    fold_phase: f64,        // ∈ [0, 1), advances at dt/fold_period per step
+    fold_period: f64,
+    fold_action_scale: f64,
     // Standing policy
     roller_mode: bool,
     motorized_wheel_mode: bool,
@@ -503,6 +526,21 @@ impl Runtime {
         if args.motorized_wheel {
             policy.set_standing_disabled(true);
             println!("✓ Motorized wheel mode: standing policy switching disabled");
+        }
+
+        // In fold mode, load fold policy and disable standing policy switching
+        if args.fold {
+            policy.set_standing_disabled(true);
+            println!("✓ Fold mode: standing policy switching disabled");
+            if let Some(ref fold_path) = args.fold_policy {
+                println!("✓ Loading fold policy from: {}", fold_path);
+                match policy.add_fold(fold_path) {
+                    Ok(()) => println!("  Fold period: {:.2}s (B button to toggle)", args.fold_period),
+                    Err(e) => eprintln!("⚠  Failed to load fold policy (B button disabled): {}", e),
+                }
+            } else {
+                eprintln!("⚠  --fold specified but no --fold-policy given; running without fold cycling");
+            }
         }
 
         // Battery benchmark: standing policy is kept active so it can handle fall recovery
@@ -632,7 +670,11 @@ impl Runtime {
             head_mode: false,
             head_offsets: [0.0; 4],
             default_positions: {
-                let mut p = DEFAULT_POSITION;
+                let mut p = if args.fold {
+                    FOLD_DEFAULT_POSITION
+                } else {
+                    DEFAULT_POSITION
+                };
                 if args.motorized_wheel {
                     // Fill in the 12 position-controlled joints from the motorized-wheel default.
                     // Skip wheel indices (4, 14) and mouth index (9); map remaining in order.
@@ -645,8 +687,14 @@ impl Runtime {
                         }
                     }
                 }
-                p[5] = args.neck_pitch_default;
-                p[6] = args.head_pitch_default;
+                // neck_pitch_default / head_pitch_default override the table.
+                // In fold mode FOLD_DEFAULT_POSITION already has the correct values
+                // (neck=0.5236, head=-0.5236); skip the override so microduck defaults
+                // (-0.5 / +0.5) don't clobber them.
+                if !args.fold {
+                    p[5] = args.neck_pitch_default;
+                    p[6] = args.head_pitch_default;
+                }
                 p
             },
             head_max: args.head_max,
@@ -675,6 +723,11 @@ impl Runtime {
             current_sum: 0.0,
             current_count: 0,
             current_peak: 0.0,
+            fold_mode: args.fold,
+            fold_active: false,
+            fold_phase: 0.0,
+            fold_period: args.fold_period,
+            fold_action_scale: args.fold_action_scale,
             roller_mode: args.roller,
             motorized_wheel_mode: args.motorized_wheel,
             motorized_wheel_action_scale: args.motorized_wheel_action_scale,
@@ -784,9 +837,9 @@ impl Runtime {
                      if self.invert_wheel { " [INVERTED]" } else { "" });
         }
 
-        // Smoothly interpolate to default position over 3 seconds
+        // Smoothly interpolate to default position over 1 second
         println!("Moving to default position over 1 second...");
-        self.motor_controller.interpolate_to_default(Duration::from_secs(1))
+        self.motor_controller.interpolate_to_position(&self.default_positions, Duration::from_secs(1))
             .context("Failed to interpolate to default position")?;
 
         println!("✓ Motors initialized and moved to default position");
@@ -882,16 +935,30 @@ impl Runtime {
             }
             self.y_button_prev_state = y_pressed;
 
-            // Handle B button (East) to toggle body pose mode
+            // Handle B button (East): fold toggle in fold mode, body pose mode otherwise
             let b_pressed = self.controller.is_button_pressed("East");
             if b_pressed && !self.b_button_prev_state {
-                self.body_pose_mode = !self.body_pose_mode;
-                if self.body_pose_mode {
-                    self.body_cmd = [0.0; 3];
-                    println!("BODY POSE mode: ON (L-stick up/down: z ±25mm, R-stick up: pitch ±20°, R-stick down: roll ±20°)");
+                if self.fold_mode {
+                    // Toggle fold cycling; fold policy always runs, phase cmd controls stand vs fold
+                    self.fold_active = !self.fold_active;
+                    if self.fold_active {
+                        self.fold_phase = 0.0;
+                        self.action_scale = self.fold_action_scale;
+                        println!("▼ FOLD: cycling ON (period={:.1}s, action_scale={:.2})", self.fold_period, self.action_scale);
+                    } else {
+                        self.fold_phase = 0.0;
+                        self.command = [1.0, 0.0, 0.0]; // phase=0 → STAND target
+                        println!("▲ FOLD: cycling OFF → holding STAND");
+                    }
                 } else {
-                    self.body_cmd = [0.0; 3];
-                    println!("BODY POSE mode: OFF");
+                    self.body_pose_mode = !self.body_pose_mode;
+                    if self.body_pose_mode {
+                        self.body_cmd = [0.0; 3];
+                        println!("BODY POSE mode: ON (L-stick up/down: z ±25mm, R-stick up: pitch ±20°, R-stick down: roll ±20°)");
+                    } else {
+                        self.body_cmd = [0.0; 3];
+                        println!("BODY POSE mode: OFF");
+                    }
                 }
             }
             self.b_button_prev_state = b_pressed;
@@ -1527,6 +1594,14 @@ impl Runtime {
                     println!("↓ Jump: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
                 }
             }
+        }
+
+        // Advance fold phase continuously while fold_active; hold [1,0,0] when idle
+        if self.fold_active {
+            let dt = 1.0 / self.control_freq as f64;
+            self.fold_phase = (self.fold_phase + dt / self.fold_period) % 1.0;
+            let two_pi_phase = 2.0 * std::f64::consts::PI * self.fold_phase;
+            self.command = [two_pi_phase.cos(), two_pi_phase.sin(), 0.0];
         }
 
         Ok(())

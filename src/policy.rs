@@ -21,6 +21,7 @@ pub struct Policy {
     ground_pick_active: bool,
     jump_mode: Option<PolicyMode>,
     jump_active: bool,
+    fold_mode: Option<PolicyMode>,
     start_time: Instant,
     command_threshold: f64,
     standing_disabled: bool,
@@ -36,6 +37,7 @@ impl Policy {
             ground_pick_active: false,
             jump_mode: None,
             jump_active: false,
+            fold_mode: None,
             start_time: Instant::now(),
             command_threshold: 0.05,
             standing_disabled: false,
@@ -59,6 +61,7 @@ impl Policy {
             ground_pick_active: false,
             jump_mode: None,
             jump_active: false,
+            fold_mode: None,
             start_time: Instant::now(),
             command_threshold: 0.05,
             standing_disabled: false,
@@ -115,6 +118,21 @@ impl Policy {
         self.jump_mode.is_some()
     }
 
+    /// Load a fold policy from an ONNX model file
+    pub fn add_fold(&mut self, path: &str) -> Result<()> {
+        let session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(2)?
+            .commit_from_file(path)?;
+        self.fold_mode = Some(PolicyMode::Onnx(session));
+        Ok(())
+    }
+
+    /// Whether a fold policy is loaded
+    pub fn has_fold(&self) -> bool {
+        self.fold_mode.is_some()
+    }
+
     /// Calculate command magnitude
     fn command_magnitude(command: &[f64; 3]) -> f64 {
         (command[0].powi(2) + command[1].powi(2) + command[2].powi(2)).sqrt()
@@ -139,6 +157,10 @@ impl Policy {
     /// # Returns
     /// Action vector (14 dimensions) for motor position offsets
     pub fn infer(&mut self, observation: &Observation, command: &[f64; 3], mouth_enabled: bool) -> Result<[f32; NUM_MOTORS]> {
+        // Fold takes highest priority when loaded — always active (phase cmd controls stand vs fold)
+        if let Some(ref mut fold_mode) = self.fold_mode {
+            return Self::run_mode(fold_mode, observation, self.start_time, false);
+        }
         // Ground pick takes priority when active
         if self.ground_pick_active {
             if let Some(ref mut gp_mode) = self.ground_pick_mode {
