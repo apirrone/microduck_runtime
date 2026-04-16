@@ -827,7 +827,7 @@ impl Runtime {
             } else {
                 None
             },
-            detection_listener: if args.stream && args.ball_detect {
+            detection_listener: if args.ball_detect {
                 let addr = format!("0.0.0.0:{}", args.ball_detect_port);
                 let listener = std::net::TcpListener::bind(&addr)
                     .with_context(|| format!("Failed to bind detection listener on {}", addr))?;
@@ -839,7 +839,7 @@ impl Runtime {
                 None
             },
             detection_client: None,
-            camera_stream: if args.stream {
+            camera_stream: if args.stream || args.ball_detect {
                 if args.ball_detect {
                     println!("Starting camera + IMX500 ball detection ({}×{} @ {} fps) …",
                         args.cam_width, args.cam_height, args.cam_fps);
@@ -855,7 +855,7 @@ impl Runtime {
                 None
             },
             brain_command: [0.0; 3],
-            odometry_engine: if args.stream {
+            odometry_engine: if args.stream || args.ball_detect {
                 println!("Odometry initialized (MJCF hardcoded chains)");
                 Some(odometry::Odometry::new())
             } else {
