@@ -371,6 +371,22 @@ struct Args {
     #[arg(long, default_value_t = 1.2)]
     ball_bbox_scale: f64,
 
+    /// Path to ball-kick policy ONNX file.
+    /// When provided, the kick-ball policy is always active (replaces the walking
+    /// policy). Ball detection is auto-enabled. Kick direction is always forward.
+    #[arg(long)]
+    ball_kick: Option<String>,
+
+    /// Target kick speed in m/s fed to the kick-ball policy as the target ball
+    /// velocity magnitude (always forward, i.e. [kick_speed, 0, 0] in body frame).
+    #[arg(long, default_value_t = 1.0)]
+    kick_speed: f64,
+
+    /// Disable head tracking when ball detection is active.
+    /// By default the head follows the detected ball; this flag turns that off.
+    #[arg(long)]
+    no_ball_track: bool,
+
 }
 
 
@@ -414,6 +430,9 @@ struct Runtime {
     ball_last_seen: Option<Instant>,   // When the ball was last detected
     ball_memory_secs: f64,             // How long to remember ball position after losing sight of it
     ball_bbox_scale: f64,              // Bbox inflation factor for depth/Z estimation
+    ball_kick_policy: Option<Policy>,  // Kick-ball policy (replaces walking when loaded)
+    kick_speed: f64,                   // Target kick speed (m/s) fed to kick-ball policy
+    ball_track: bool,                  // Whether to move the head toward the detected ball
     cmd_alpha: f64,   // EMA smoothing factor for velocity commands (0=still, 1=no smoothing)
     body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
     y_button_prev_state: bool,  // Track Y button state for edge detection
@@ -750,6 +769,19 @@ impl Runtime {
             ball_last_seen: None,
             ball_memory_secs: args.ball_memory_secs,
             ball_bbox_scale: args.ball_bbox_scale,
+            ball_kick_policy: if let Some(ref path) = args.ball_kick {
+                let expanded = if path.starts_with("~/") {
+                    format!("{}/{}", std::env::var("HOME").unwrap_or_default(), &path[2..])
+                } else {
+                    path.clone()
+                };
+                println!("✓ Loading kick-ball policy from: {}", expanded);
+                Some(Policy::new_onnx(&expanded).context("Failed to load kick-ball policy")?)
+            } else {
+                None
+            },
+            kick_speed: args.kick_speed,
+            ball_track: !args.no_ball_track,
             cmd_alpha: args.cmd_alpha,
             body_cmd: [0.0; 3],
             y_button_prev_state: false,
@@ -842,7 +874,7 @@ impl Runtime {
             } else {
                 None
             },
-            detection_listener: if args.ball_detect {
+            detection_listener: if args.ball_detect || args.ball_kick.is_some() {
                 let addr = format!("0.0.0.0:{}", args.ball_detect_port);
                 let listener = std::net::TcpListener::bind(&addr)
                     .with_context(|| format!("Failed to bind detection listener on {}", addr))?;
@@ -854,8 +886,9 @@ impl Runtime {
                 None
             },
             detection_client: None,
-            camera_stream: if args.stream || args.ball_detect {
-                if args.ball_detect {
+            camera_stream: if args.stream || args.ball_detect || args.ball_kick.is_some() {
+                let need_detect = args.ball_detect || args.ball_kick.is_some();
+                if need_detect {
                     println!("Starting camera + IMX500 ball detection ({}×{} @ {} fps) …",
                         args.cam_width, args.cam_height, args.cam_fps);
                 } else {
@@ -864,13 +897,13 @@ impl Runtime {
                 }
                 Some(camera::CameraStream::start(
                     args.cam_width, args.cam_height, args.cam_fps,
-                    args.ball_detect,
+                    need_detect,
                 ))
             } else {
                 None
             },
             brain_command: [0.0; 3],
-            odometry_engine: if args.stream || args.ball_detect {
+            odometry_engine: if args.stream || args.ball_detect || args.ball_kick.is_some() {
                 println!("Odometry initialized (MJCF hardcoded chains)");
                 Some(odometry::Odometry::new())
             } else {
@@ -1442,21 +1475,24 @@ impl Runtime {
         }
 
         // ── Head tracking (uses world-frame memory, corrected by odometry) ────
-        // Runs as long as the ball was seen recently, even if not in the current frame.
-        if let Some(ball_world) = self.ball_world_pos {
-            let age_secs = self.ball_last_seen
-                .map(|t| t.elapsed().as_secs_f64())
-                .unwrap_or(f64::MAX);
-            if age_secs < self.ball_memory_secs {
-                let ball_trunk = world_pos_to_trunk(ball_world, self.odometry, imu_data.quat);
-                apply_head_tracking(
-                    &mut self.head_offsets,
-                    ball_trunk,
-                    self.ball_track_gain,
-                    self.head_alpha,
-                );
+        // Runs as long as the ball was seen recently, unless --no-ball-track is set.
+        if self.ball_track {
+            if let Some(ball_world) = self.ball_world_pos {
+                let age_secs = self.ball_last_seen
+                    .map(|t| t.elapsed().as_secs_f64())
+                    .unwrap_or(f64::MAX);
+                if age_secs < self.ball_memory_secs {
+                    let ball_trunk = world_pos_to_trunk(ball_world, self.odometry, imu_data.quat);
+                    apply_head_tracking(
+                        &mut self.head_offsets,
+                        ball_trunk,
+                        self.ball_track_gain,
+                        self.head_alpha,
+                    );
+                }
             }
         }
+
 
         // ── Brain UDP command socket (port 9872) ──────────────────────────────
         // Drain all pending datagrams — only the last one matters.
@@ -1543,32 +1579,59 @@ impl Runtime {
             }
         }
 
-        let observation = if self.motorized_wheel_mode {
-            Observation::new_motorized_wheel(
+        // ── Kick-ball policy (overrides walking policy when loaded) ──────────────
+        // Build a 54D kick-ball observation and run the dedicated ONNX model.
+        // Ball position defaults to [0,0,0] (body frame) when not yet detected.
+        // Kick target velocity is always [kick_speed, 0, 0] (straight forward).
+        let action = if self.ball_kick_policy.is_some() {
+            let ball_body = if let Some(bw) = self.ball_world_pos {
+                world_pos_to_trunk(bw, self.odometry, imu_data.quat)
+            } else {
+                [0.0_f64; 3]
+            };
+            let kick_vel = [self.kick_speed, 0.0_f64, 0.0_f64];
+            let kick_obs = Observation::new_kick_ball(
                 &imu_data,
-                obs_command,
                 &motor_state,
                 &self.last_action,
                 &self.default_positions,
-            )
+                ball_body,
+                kick_vel,
+            );
+            if self.policy_enabled {
+                self.ball_kick_policy.as_mut().unwrap()
+                    .infer(&kick_obs, &[0.0; 3], false)
+                    .context("Failed to run kick-ball policy inference")?
+            } else {
+                [0.0f32; NUM_MOTORS]
+            }
         } else {
-            Observation::new(
-                &imu_data,
-                obs_command,
-                &motor_state,
-                &self.last_action,
-                &self.default_positions,
-                self.mouth_enabled,
-            )
-        };
+            // ── Normal walking/standing policy ────────────────────────────────
+            let observation = if self.motorized_wheel_mode {
+                Observation::new_motorized_wheel(
+                    &imu_data,
+                    obs_command,
+                    &motor_state,
+                    &self.last_action,
+                    &self.default_positions,
+                )
+            } else {
+                Observation::new(
+                    &imu_data,
+                    obs_command,
+                    &motor_state,
+                    &self.last_action,
+                    &self.default_positions,
+                    self.mouth_enabled,
+                )
+            };
 
-        // Run policy inference (or hold default position if policy disabled)
-        let action = if self.policy_enabled {
-            self.policy.infer(&observation, effective_command, self.mouth_enabled)
-                .context("Failed to run policy inference")?
-        } else {
-            // During standby, use zero actions (hold default position)
-            [0.0f32; NUM_MOTORS]
+            if self.policy_enabled {
+                self.policy.infer(&observation, effective_command, self.mouth_enabled)
+                    .context("Failed to run policy inference")?
+            } else {
+                [0.0f32; NUM_MOTORS]
+            }
         };
 
         // Convert action offsets to motor targets: init_pos + effective_action_scale * action.
