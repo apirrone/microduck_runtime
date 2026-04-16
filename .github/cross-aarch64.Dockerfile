@@ -1,10 +1,11 @@
 FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5
 
 # Pre-install ARM64 libudev so the release build doesn't need apt-get at compile time.
-# Base image is Ubuntu 20.04 (focal); ARM64 packages live on ports.ubuntu.com.
+# Detects the Ubuntu codename at build time to pick the right ports mirror.
 RUN dpkg --add-architecture arm64 \
+ && . /etc/os-release \
  && sed -i 's|^deb |deb [arch=amd64] |' /etc/apt/sources.list \
- && printf 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ focal main restricted universe\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ focal-updates main restricted universe\n' >> /etc/apt/sources.list \
+ && printf "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ ${UBUNTU_CODENAME} main restricted universe\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ ${UBUNTU_CODENAME}-updates main restricted universe\n" >> /etc/apt/sources.list \
  && apt-get update -qq \
  && apt-get install -y --no-install-recommends libudev-dev:arm64 libstdc++6:arm64 \
  && SO=$(find /usr/lib/aarch64-linux-gnu /lib/aarch64-linux-gnu -name 'libudev.so*' | head -1) \
