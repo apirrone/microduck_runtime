@@ -171,9 +171,8 @@ fn capture_loop(
             thread::spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
                 for line in reader.lines().flatten() {
-                    // Log everything so the actual format is visible in journalctl.
-                    eprintln!("[rpicam] {line}");
                     if let Some(det_json) = parse_detection_line(&line) {
+                        eprintln!("[detect] {}", line.trim());
                         pending_reader.lock().unwrap().push(det_json);
                     }
                 }

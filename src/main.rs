@@ -346,6 +346,18 @@ struct Args {
     #[arg(long, default_value_t = 9873)]
     ball_detect_port: u16,
 
+    /// Proportional gain for ball-tracking head control (radians of offset per image-width error).
+    /// Flip the sign if the head moves in the wrong direction.
+    #[arg(long, default_value_t = 0.4)]
+    ball_track_gain: f64,
+
+    /// How long (seconds) to keep tracking the ball after it disappears from view.
+    /// During this window the last known world-frame position is projected back into
+    /// the current trunk frame using odometry, so the head keeps pointing toward
+    /// where the ball was even if the robot rotates or translates slightly.
+    #[arg(long, default_value_t = 3.0)]
+    ball_memory_secs: f64,
+
 }
 
 
@@ -384,6 +396,10 @@ struct Runtime {
     default_positions: [f64; NUM_MOTORS],  // per-run override of DEFAULT_POSITION
     head_max: f64,  // Max head offset in radians
     head_alpha: f64,  // EMA smoothing factor for head commands (0=still, 1=no smoothing)
+    ball_track_gain: f64,  // Proportional gain for ball-tracking head control
+    ball_world_pos: Option<[f64; 3]>,  // Last known ball position in world frame (None = never seen)
+    ball_last_seen: Option<Instant>,   // When the ball was last detected
+    ball_memory_secs: f64,             // How long to remember ball position after losing sight of it
     cmd_alpha: f64,   // EMA smoothing factor for velocity commands (0=still, 1=no smoothing)
     body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
     y_button_prev_state: bool,  // Track Y button state for edge detection
@@ -715,6 +731,10 @@ impl Runtime {
             },
             head_max: args.head_max,
             head_alpha: args.head_alpha,
+            ball_track_gain: args.ball_track_gain,
+            ball_world_pos: None,
+            ball_last_seen: None,
+            ball_memory_secs: args.ball_memory_secs,
             cmd_alpha: args.cmd_alpha,
             body_cmd: [0.0; 3],
             y_button_prev_state: false,
@@ -1355,7 +1375,7 @@ impl Runtime {
             }
         }
 
-        // ── Ball-detection JSON stream (port 9873) ────────────────────────────
+        // ── Ball-detection: accept client, consume latest JSON, stream + track ──
         if let Some(ref listener) = self.detection_listener {
             if self.detection_client.is_none() {
                 if let Ok((stream, addr)) = listener.accept() {
@@ -1365,21 +1385,47 @@ impl Runtime {
                 }
             }
         }
-        if self.detection_client.is_some() {
-            if let Some(ref cam) = self.camera_stream {
-                let det = cam.latest_detections.lock().unwrap().take();
-                if let Some(json_line) = det {
-                    // Send newline-delimited JSON
-                    let mut payload = json_line.into_bytes();
-                    payload.push(b'\n');
-                    let ok = self.detection_client.as_mut()
-                        .map(|c| c.write_all(&payload).is_ok())
-                        .unwrap_or(false);
-                    if !ok {
-                        println!("Ball-detection client disconnected");
-                        self.detection_client = None;
-                    }
+        // Take the latest detection JSON once; reuse for both TCP and head tracking.
+        let latest_det = self.camera_stream.as_ref()
+            .and_then(|cam| cam.latest_detections.lock().unwrap().take());
+
+        if let Some(ref json_line) = latest_det {
+            // ── TCP stream to viewer ──────────────────────────────────────────
+            if self.detection_client.is_some() {
+                let mut payload = json_line.clone().into_bytes();
+                payload.push(b'\n');
+                let ok = self.detection_client.as_mut()
+                    .map(|c| c.write_all(&payload).is_ok())
+                    .unwrap_or(false);
+                if !ok {
+                    println!("Ball-detection client disconnected");
+                    self.detection_client = None;
                 }
+            }
+            // ── Ball world-frame update ───────────────────────────────────────
+            // If the camera sees the ball, convert its trunk-frame position to
+            // world frame via odometry and store it for persistence.
+            if let Some(ball_trunk) = extract_ball_trunk_pos(json_line) {
+                let ball_world = trunk_pos_to_world(ball_trunk, self.odometry);
+                self.ball_world_pos = Some(ball_world);
+                self.ball_last_seen = Some(Instant::now());
+            }
+        }
+
+        // ── Head tracking (uses world-frame memory, corrected by odometry) ────
+        // Runs as long as the ball was seen recently, even if not in the current frame.
+        if let Some(ball_world) = self.ball_world_pos {
+            let age_secs = self.ball_last_seen
+                .map(|t| t.elapsed().as_secs_f64())
+                .unwrap_or(f64::MAX);
+            if age_secs < self.ball_memory_secs {
+                let ball_trunk = world_pos_to_trunk(ball_world, self.odometry);
+                apply_head_tracking(
+                    &mut self.head_offsets,
+                    ball_trunk,
+                    self.ball_track_gain,
+                    self.head_alpha,
+                );
             }
         }
 
@@ -2003,6 +2049,138 @@ impl Runtime {
         println!("✓ Runtime shutdown complete (motors remain enabled)");
         Ok(())
     }
+}
+
+// ── Ball tracking (FK-based, torso camera) ────────────────────────────────────
+//
+// The torso camera is fixed to trunk_base — moving the head doesn't change what
+// it sees, so image-based visual servoing doesn't close the loop.  Instead:
+//
+//  1. Estimate ball 3D position in trunk_base frame using the pinhole camera
+//     model + known ball diameter (60 mm).
+//  2. Compute the azimuth and elevation of the ball from the neck joint.
+//  3. Set head_yaw / head_pitch offsets to point the head at that position.
+//
+// Torso camera (from robot_walk.xml):
+//   pos  = (0.0506, 0, 0.0305) in trunk_base
+//   quat = (0.5, 0.5, -0.5, -0.5)  →  looks in trunk +X, image-right = trunk -Y,
+//                                       image-up = trunk +Z
+//
+// Signs for head_yaw / head_pitch depend on motor zero conventions.
+// Use --ball-track-gain with a negative value to invert if head moves wrong way.
+/// Parse detection JSON and return the ball's 3-D position [x, y, z] in the
+/// trunk_base frame, or `None` if no sports-ball / apple is present.
+///
+/// Pi AI Camera (IMX500) at 640×480: estimated focal length ≈ 280 px
+/// (derived from 2.75 mm lens / 6.287 mm sensor width / 2028 px full-res, scaled to 640 px).
+///
+/// Torso camera in trunk_base (from robot_walk.xml):
+///   pos  = (0.0506, 0.0, 0.0305)
+///   quat = (0.5, 0.5, -0.5, -0.5) → R = [[0,0,-1],[-1,0,0],[0,1,0]]
+///   image-right = trunk -Y, image-up = trunk +Z, optical axis = trunk +X
+fn extract_ball_trunk_pos(json: &str) -> Option<[f64; 3]> {
+    const TARGET_CLASSES: [&str; 2] = ["sports ball", "apple"];
+    const FX: f64 = 280.0;
+    const FY: f64 = 280.0;
+    const CX_IMG: f64 = 320.0;
+    const CY_IMG: f64 = 240.0;
+    const BALL_DIAMETER: f64 = 0.06; // 60 mm
+
+    let mut best_score = 0.0_f64;
+    let mut best_box: Option<[f64; 4]> = None;
+
+    for chunk in json.split('{').skip(1) {
+        let score = chunk.split("\"score\":").nth(1)
+            .and_then(|s| s.split([',', '}']).next())
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .unwrap_or(0.0);
+        if score <= best_score { continue; }
+        let is_target = TARGET_CLASSES.iter().any(|&cls| {
+            chunk.contains(&format!("\"class\":\"{cls}\""))
+        });
+        if !is_target { continue; }
+        if let Some(arr) = chunk.split("\"box\":[").nth(1).and_then(|s| s.split(']').next()) {
+            let nums: Vec<f64> = arr.split(',')
+                .filter_map(|v| v.trim().parse().ok())
+                .collect();
+            if nums.len() == 4 {
+                best_score = score;
+                best_box = Some([nums[0], nums[1], nums[2], nums[3]]);
+            }
+        }
+    }
+
+    let [bx, by, bw, bh] = best_box?;
+    let cx = bx + bw / 2.0;
+    let cy = by + bh / 2.0;
+    let apparent_px = bw.max(bh).max(1.0);
+    let z_depth = FX * BALL_DIAMETER / apparent_px; // depth along camera optical axis
+
+    // p_trunk = cam_origin + R * [u/fx * z, v/fy * z, z]
+    //   trunk_x = 0.0506 + z_depth
+    //   trunk_y = 0.0    - (cx - cx_img) / fx * z_depth
+    //   trunk_z = 0.0305 - (cy - cy_img) / fy * z_depth
+    Some([
+        0.0506 + z_depth,
+        0.0    - (cx - CX_IMG) / FX * z_depth,
+        0.0305 - (cy - CY_IMG) / FY * z_depth,
+    ])
+}
+
+/// Convert a point in trunk_base frame to the world (odometry) frame.
+///
+/// `odo` is `[x, y, z, yaw]` (trunk origin in world frame, yaw around Z).
+/// Only yaw is used for rotation; roll/pitch are small and omitted for simplicity.
+#[inline]
+fn trunk_pos_to_world(p: [f64; 3], odo: [f64; 4]) -> [f64; 3] {
+    let (sin_yaw, cos_yaw) = odo[3].sin_cos();
+    [
+        odo[0] + cos_yaw * p[0] - sin_yaw * p[1],
+        odo[1] + sin_yaw * p[0] + cos_yaw * p[1],
+        odo[2] + p[2],
+    ]
+}
+
+/// Convert a point in the world (odometry) frame back to trunk_base frame.
+///
+/// Inverse of `trunk_pos_to_world`.
+#[inline]
+fn world_pos_to_trunk(p: [f64; 3], odo: [f64; 4]) -> [f64; 3] {
+    let (sin_yaw, cos_yaw) = odo[3].sin_cos();
+    let dx = p[0] - odo[0];
+    let dy = p[1] - odo[1];
+    [
+         cos_yaw * dx + sin_yaw * dy,
+        -sin_yaw * dx + cos_yaw * dy,
+        p[2] - odo[2],
+    ]
+}
+
+/// Update head_offsets to point toward `ball_trunk` (a point in trunk_base frame).
+///
+/// Uses the neck joint origin as the pivot, computes azimuth (→ head_yaw) and
+/// elevation (→ head_pitch), and applies them via an EMA with factor `alpha`.
+fn apply_head_tracking(head_offsets: &mut [f64; 4], ball_trunk: [f64; 3], gain: f64, alpha: f64) {
+    // Neck joint origin in trunk_base (from robot_walk.xml long_neck_plate2 body pos)
+    const NECK: [f64; 3] = [0.0375, 0.0146, 0.0552];
+
+    let dx = ball_trunk[0] - NECK[0];
+    let dy = ball_trunk[1] - NECK[1];
+    let dz = ball_trunk[2] - NECK[2];
+    let horiz = (dx * dx + dy * dy).sqrt().max(1e-3);
+
+    // Azimuth in trunk XY plane: positive = ball to left (+Y), negative = right (-Y)
+    let azimuth   = dy.atan2(dx);
+    // Elevation: positive = above, negative = below
+    let elevation = dz.atan2(horiz);
+
+    // head_yaw (index 2) tracks azimuth; head_pitch (index 1) tracks elevation.
+    // Negate gain via --ball-track-gain if head moves the wrong way.
+    let yaw_target   =  gain * azimuth;
+    let pitch_target = -gain * elevation;
+
+    head_offsets[2] += alpha * (yaw_target   - head_offsets[2]);
+    head_offsets[1] += alpha * (pitch_target - head_offsets[1]);
 }
 
 #[tokio::main(flavor = "current_thread")]
