@@ -145,7 +145,7 @@ fn capture_loop(
         // Write the IMX500 post-process config to a temp file (once per restart)
         write_pp_config()?;
         cmd.args(["--post-process-file", PP_CONFIG_PATH,
-                  "--verbose", "1"]);
+                  "--verbose", "2"]);
         eprintln!("[camera] ball-detect mode: IMX500 SSD inference enabled");
     }
 
@@ -155,42 +155,41 @@ fn capture_loop(
         .spawn()
         .with_context(|| format!("Failed to spawn {binary}"))?;
 
-    // In ball-detect mode: parse detection lines from stderr in a side thread.
+    // In ball-detect mode: two threads — one blocks on stderr lines, one
+    // flushes the shared pending list every 200 ms.  Splitting them means
+    // the timer keeps firing (sending `[]` heartbeats) even when rpicam-apps
+    // goes quiet after the model loads, which keeps the TCP client connected.
     if ball_detect {
         if let Some(stderr) = child.stderr.take() {
-            let det_buf = Arc::clone(&det);
+            // Shared list of parsed detection JSON fragments not yet flushed.
+            let pending: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+            // Thread 1: blocking stderr reader — appends parsed detections.
+            let pending_reader = Arc::clone(&pending);
             thread::spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
-                let mut pending: Vec<String> = Vec::new();
-                let mut last_flush = std::time::Instant::now();
-
                 for line in reader.lines().flatten() {
-                    // Log EVERYTHING from rpicam-apps so the format is visible
-                    // in `journalctl -u microduck_runtime` for debugging.
+                    // Log everything so the actual format is visible in journalctl.
                     eprintln!("[rpicam] {line}");
-
                     if let Some(det_json) = parse_detection_line(&line) {
-                        pending.push(det_json);
-                    }
-
-                    // Flush every ~200 ms regardless of header lines.
-                    // This also sends [] when no objects are detected, which
-                    // keeps the TCP connection alive on the viewer side.
-                    if last_flush.elapsed() >= Duration::from_millis(200) {
-                        let json = format!("[{}]", pending.join(","));
-                        {
-                            let mut lock = det_buf.lock().unwrap();
-                            *lock = Some(json);
-                        }
-                        pending.clear();
-                        last_flush = std::time::Instant::now();
+                        pending_reader.lock().unwrap().push(det_json);
                     }
                 }
+            });
 
-                // Final flush when the process exits.
-                let json = format!("[{}]", pending.join(","));
-                let mut lock = det_buf.lock().unwrap();
-                *lock = Some(json);
+            // Thread 2: timer — drains pending into det_buf every 200 ms.
+            // Sends `[]` when nothing was detected, keeping the TCP stream alive.
+            let det_buf_timer = Arc::clone(&det);
+            thread::spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_millis(200));
+                    let mut p = pending.lock().unwrap();
+                    let json = format!("[{}]", p.join(","));
+                    p.clear();
+                    drop(p);
+                    let mut lock = det_buf_timer.lock().unwrap();
+                    *lock = Some(json);
+                }
             });
         }
     }
