@@ -364,6 +364,13 @@ struct Args {
     #[arg(long, default_value_t = 3.0)]
     ball_memory_secs: f64,
 
+    /// Bounding-box inflation factor for ball size estimation.
+    /// SSD detections typically pad the bbox 15-25% beyond the actual object edge,
+    /// making the ball appear larger (= closer / higher) than it really is.
+    /// A value of 1.2 means the bbox is treated as 20% bigger than the ball.
+    #[arg(long, default_value_t = 1.2)]
+    ball_bbox_scale: f64,
+
 }
 
 
@@ -406,6 +413,7 @@ struct Runtime {
     ball_world_pos: Option<[f64; 3]>,  // Last known ball position in world frame (None = never seen)
     ball_last_seen: Option<Instant>,   // When the ball was last detected
     ball_memory_secs: f64,             // How long to remember ball position after losing sight of it
+    ball_bbox_scale: f64,              // Bbox inflation factor for depth/Z estimation
     cmd_alpha: f64,   // EMA smoothing factor for velocity commands (0=still, 1=no smoothing)
     body_cmd: [f64; 3],  // Body pose commands [z_offset_m, pitch_rad, roll_rad] (normalized before obs)
     y_button_prev_state: bool,  // Track Y button state for edge detection
@@ -741,6 +749,7 @@ impl Runtime {
             ball_world_pos: None,
             ball_last_seen: None,
             ball_memory_secs: args.ball_memory_secs,
+            ball_bbox_scale: args.ball_bbox_scale,
             cmd_alpha: args.cmd_alpha,
             body_cmd: [0.0; 3],
             y_button_prev_state: false,
@@ -1425,7 +1434,7 @@ impl Runtime {
             // ── Ball world-frame update ───────────────────────────────────────
             // If the camera sees the ball, convert its trunk-frame position to
             // world frame via odometry and store it for persistence.
-            if let Some(ball_trunk) = extract_ball_trunk_pos(json_line) {
+            if let Some(ball_trunk) = extract_ball_trunk_pos(json_line, self.ball_bbox_scale) {
                 let ball_world = trunk_pos_to_world(ball_trunk, self.odometry, imu_data.quat);
                 self.ball_world_pos = Some(ball_world);
                 self.ball_last_seen = Some(Instant::now());
@@ -2098,7 +2107,7 @@ impl Runtime {
 ///   pos  = (0.0506, 0.0, 0.0305)
 ///   quat = (0.5, 0.5, -0.5, -0.5) → R = [[0,0,-1],[-1,0,0],[0,1,0]]
 ///   image-right = trunk -Y, image-up = trunk +Z, optical axis = trunk +X
-fn extract_ball_trunk_pos(json: &str) -> Option<[f64; 3]> {
+fn extract_ball_trunk_pos(json: &str, bbox_scale: f64) -> Option<[f64; 3]> {
     const TARGET_CLASSES: [&str; 2] = ["sports ball", "apple"];
     const FX: f64 = 280.0;
     const FY: f64 = 280.0;
@@ -2133,7 +2142,9 @@ fn extract_ball_trunk_pos(json: &str) -> Option<[f64; 3]> {
     let [bx, by, bw, bh] = best_box?;
     let cx = bx + bw / 2.0;
     let cy = by + bh / 2.0;
-    let apparent_px = bw.max(bh).max(1.0);
+    // Divide by bbox_scale to correct for SSD padding: bbox is typically ~20% larger
+    // than the actual ball, making it appear bigger (closer/higher) than it is.
+    let apparent_px = (bw.max(bh) / bbox_scale).max(1.0);
     let z_depth = FX * BALL_DIAMETER / apparent_px; // depth along camera optical axis
 
     // The camera is physically mounted rotated 90° CW; view_camera.py rotates 90° CCW
