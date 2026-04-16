@@ -496,14 +496,6 @@ impl Runtime {
             ]);
         }
 
-        // Fold robot: IMU is rotated 90° around Y → x+=up, so world gravity is [-1, 0, 0]
-        // This only matters for quaternion-based projected gravity (--projected-gravity / BNO08X / BMI088).
-        // Raw accelerometer mode (BNO055 default) is correct without this change.
-        if args.fold {
-            imu_controller.set_world_gravity([-1.0, 0.0, 0.0]);
-            println!("✓ Fold mode: world gravity set to [-1, 0, 0] (x+=up)");
-        }
-
         // Initialize policy based on arguments
         let mut policy = if args.dummy {
             println!("✓ Using dummy policy (always outputs zeros)");
@@ -1120,6 +1112,16 @@ impl Runtime {
         // Read IMU data
         let mut imu_data = self.imu_controller.read()
             .context("Failed to read IMU data")?;
+
+        // Fold robot axis remap: physical IMU reads (x=up, y=left, z=back).
+        // Remap to standard body frame (x=forward, y=left, z=up):
+        //   new_x = -old_z,  new_y = old_y,  new_z = old_x
+        if self.fold_mode {
+            let [ax, ay, az] = imu_data.accel;
+            let [gx, gy, gz] = imu_data.gyro;
+            imu_data.accel = [-az, ay, ax];
+            imu_data.gyro  = [-gz, gy, gx];
+        }
 
         // Apply pitch offset if specified (rotation around Y axis)
         if self.pitch_offset != 0.0 {
