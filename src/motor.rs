@@ -443,6 +443,17 @@ impl MotorController {
         Ok(fixes)
     }
 
+    /// Send Dynamixel reboot instruction to all active motors.
+    /// After returning, motors need ~500 ms to restart before they respond again.
+    pub fn reboot_all(&mut self) -> Result<()> {
+        for &(_, id) in &self.active_motors() {
+            self.controller
+                .reboot(id)
+                .map_err(|e| anyhow::anyhow!("Failed to reboot motor {}: {}", id, e))?;
+        }
+        Ok(())
+    }
+
     /// Set PID gains for all motors
     pub fn set_pid_gains(&mut self, kp: u16, ki: u16, kd: u16) -> Result<()> {
         for &(_, id) in &self.active_motors() {
