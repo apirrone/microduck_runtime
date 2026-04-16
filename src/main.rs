@@ -352,9 +352,9 @@ struct Args {
     ball_detect_port: u16,
 
     /// Proportional gain for ball-tracking head control.
-    /// 1.0 = head points directly at the ball; reduce if oscillatory.
+    /// -1.0 (default) = head points directly at the ball; reduce magnitude if oscillatory.
     /// Flip the sign if the head moves in the wrong direction.
-    #[arg(long, default_value_t = 1.0, allow_hyphen_values = true)]
+    #[arg(long, default_value_t = -1.0, allow_hyphen_values = true)]
     ball_track_gain: f64,
 
     /// How long (seconds) to keep tracking the ball after it disappears from view.
@@ -1426,7 +1426,7 @@ impl Runtime {
             // If the camera sees the ball, convert its trunk-frame position to
             // world frame via odometry and store it for persistence.
             if let Some(ball_trunk) = extract_ball_trunk_pos(json_line) {
-                let ball_world = trunk_pos_to_world(ball_trunk, self.odometry);
+                let ball_world = trunk_pos_to_world(ball_trunk, self.odometry, imu_data.quat);
                 self.ball_world_pos = Some(ball_world);
                 self.ball_last_seen = Some(Instant::now());
             }
@@ -1439,7 +1439,7 @@ impl Runtime {
                 .map(|t| t.elapsed().as_secs_f64())
                 .unwrap_or(f64::MAX);
             if age_secs < self.ball_memory_secs {
-                let ball_trunk = world_pos_to_trunk(ball_world, self.odometry);
+                let ball_trunk = world_pos_to_trunk(ball_world, self.odometry, imu_data.quat);
                 apply_head_tracking(
                     &mut self.head_offsets,
                     ball_trunk,
@@ -2104,7 +2104,7 @@ fn extract_ball_trunk_pos(json: &str) -> Option<[f64; 3]> {
     const FY: f64 = 280.0;
     const CX_IMG: f64 = 320.0;
     const CY_IMG: f64 = 240.0;
-    const BALL_DIAMETER: f64 = 0.06; // 60 mm
+    const BALL_DIAMETER: f64 = 0.065; // 65 mm
 
     let mut best_score = 0.0_f64;
     let mut best_box: Option<[f64; 4]> = None;
@@ -2152,33 +2152,44 @@ fn extract_ball_trunk_pos(json: &str) -> Option<[f64; 3]> {
     ])
 }
 
+/// Rotate vector `v` by unit quaternion `q = [w, x, y, z]` using Rodrigues formula.
+#[inline]
+fn quat_rotate(v: [f64; 3], q: [f64; 4]) -> [f64; 3] {
+    let [qw, qx, qy, qz] = q;
+    let [vx, vy, vz] = v;
+    // t = 2 * (q_vec × v)
+    let tx = 2.0 * (qy * vz - qz * vy);
+    let ty = 2.0 * (qz * vx - qx * vz);
+    let tz = 2.0 * (qx * vy - qy * vx);
+    // v' = v + qw * t + q_vec × t
+    [
+        vx + qw * tx + qy * tz - qz * ty,
+        vy + qw * ty + qz * tx - qx * tz,
+        vz + qw * tz + qx * ty - qy * tx,
+    ]
+}
+
 /// Convert a point in trunk_base frame to the world (odometry) frame.
 ///
-/// `odo` is `[x, y, z, yaw]` (trunk origin in world frame, yaw around Z).
-/// Only yaw is used for rotation; roll/pitch are small and omitted for simplicity.
+/// Uses the full IMU quaternion so trunk pitch/roll are correctly accounted for.
+/// `odo` is `[x, y, z, yaw]` — only `[0..3]` (position) is used here.
 #[inline]
-fn trunk_pos_to_world(p: [f64; 3], odo: [f64; 4]) -> [f64; 3] {
-    let (sin_yaw, cos_yaw) = odo[3].sin_cos();
-    [
-        odo[0] + cos_yaw * p[0] - sin_yaw * p[1],
-        odo[1] + sin_yaw * p[0] + cos_yaw * p[1],
-        odo[2] + p[2],
-    ]
+fn trunk_pos_to_world(p: [f64; 3], odo: [f64; 4], imu_quat: [f64; 4]) -> [f64; 3] {
+    let r = quat_rotate(p, imu_quat);
+    [odo[0] + r[0], odo[1] + r[1], odo[2] + r[2]]
 }
 
 /// Convert a point in the world (odometry) frame back to trunk_base frame.
 ///
-/// Inverse of `trunk_pos_to_world`.
+/// Inverse of `trunk_pos_to_world` — rotates by conjugate quaternion.
 #[inline]
-fn world_pos_to_trunk(p: [f64; 3], odo: [f64; 4]) -> [f64; 3] {
-    let (sin_yaw, cos_yaw) = odo[3].sin_cos();
+fn world_pos_to_trunk(p: [f64; 3], odo: [f64; 4], imu_quat: [f64; 4]) -> [f64; 3] {
     let dx = p[0] - odo[0];
     let dy = p[1] - odo[1];
-    [
-         cos_yaw * dx + sin_yaw * dy,
-        -sin_yaw * dx + cos_yaw * dy,
-        p[2] - odo[2],
-    ]
+    let dz = p[2] - odo[2];
+    // conjugate: negate xyz part of the quaternion
+    let q_inv = [imu_quat[0], -imu_quat[1], -imu_quat[2], -imu_quat[3]];
+    quat_rotate([dx, dy, dz], q_inv)
 }
 
 /// Update head_offsets to point toward `ball_trunk` (a point in trunk_base frame).
@@ -2200,9 +2211,9 @@ fn apply_head_tracking(head_offsets: &mut [f64; 4], ball_trunk: [f64; 3], gain: 
     let elevation = dz.atan2(horiz);
 
     // head_yaw (index 2) tracks azimuth; head_pitch (index 1) tracks elevation.
-    // Negate gain via --ball-track-gain if head moves the wrong way.
-    let yaw_target   =  gain * azimuth;
-    let pitch_target = -gain * elevation;
+    // Both use the same gain sign (default -1.0 works for both axes).
+    let yaw_target   = gain * azimuth;
+    let pitch_target = gain * elevation;
 
     head_offsets[2] += alpha * (yaw_target   - head_offsets[2]);
     head_offsets[1] += alpha * (pitch_target - head_offsets[1]);

@@ -111,7 +111,7 @@ _BALL_RGBA    = np.array([1.0, 0.6,  0.0, 0.9 ], np.float32)   # orange sphere
 _SQUARE_Z     = 0.008
 _IDENTITY_MAT = np.eye(3, dtype=np.float64).flatten()
 
-BALL_RADIUS   = 0.03   # 60 mm diameter
+BALL_RADIUS   = 0.0325  # 65 mm diameter
 
 
 def _rot_toward(dx: float, dy: float) -> np.ndarray:
