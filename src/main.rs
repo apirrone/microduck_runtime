@@ -2117,14 +2117,19 @@ fn extract_ball_trunk_pos(json: &str) -> Option<[f64; 3]> {
     let apparent_px = bw.max(bh).max(1.0);
     let z_depth = FX * BALL_DIAMETER / apparent_px; // depth along camera optical axis
 
-    // p_trunk = cam_origin + R * [u/fx * z, v/fy * z, z]
-    //   trunk_x = 0.0506 + z_depth
-    //   trunk_y = 0.0    - (cx - cx_img) / fx * z_depth
-    //   trunk_z = 0.0305 - (cy - cy_img) / fy * z_depth
+    // The camera is physically mounted rotated 90° CW; view_camera.py rotates 90° CCW
+    // to correct the display.  Detection bounding boxes are in RAW sensor coordinates,
+    // so the axes are swapped relative to a normally-mounted camera:
+    //   raw cx (horizontal in raw) → physical UP/DOWN  → trunk Z
+    //   raw cy (vertical in raw)   → physical LEFT/RIGHT → trunk Y
+    //
+    // After the 90° CCW display rotation: display_x = raw cy, display_y = 639 - raw cx
+    //   → trunk_y driven by (cy - CY_IMG):  cy > 240 = display right = trunk -Y (robot right)
+    //   → trunk_z driven by (cx - CX_IMG):  cx > 320 = display up    = trunk +Z (up)
     Some([
         0.0506 + z_depth,
-        0.0    - (cx - CX_IMG) / FX * z_depth,
-        0.0305 - (cy - CY_IMG) / FY * z_depth,
+        0.0    - (cy - CY_IMG) / FY * z_depth,
+        0.0305 + (cx - CX_IMG) / FX * z_depth,
     ])
 }
 
