@@ -1117,12 +1117,25 @@ impl Runtime {
 
         // Fold robot axis remap: physical IMU reads (x=up, y=left, z=back).
         // Remap to standard body frame (x=forward, y=left, z=up):
-        //   new_x = -old_z,  new_y = old_y,  new_z = old_x
+        //   accel/gyro:  new_x = -old_z,  new_y = old_y,  new_z = old_x
+        //   quaternion:  post-multiply by +90° around Y = [√2/2, 0, √2/2, 0]
+        //     q_std = q_sensor * [s, 0, s, 0]  where s = √2/2
+        //     w_new = (qw-qy)*s,  x_new = (qx-qz)*s,  y_new = (qw+qy)*s,  z_new = (qx+qz)*s
+        //   Verified: when upright q_sensor≈[s,0,-s,0] → q_std=[1,0,0,0].
+        //   The quat fix is only needed for streaming (the policy does not use quat).
         if self.fold_mode {
             let [ax, ay, az] = imu_data.accel;
             let [gx, gy, gz] = imu_data.gyro;
             imu_data.accel = [-az, ay, ax];
             imu_data.gyro  = [-gz, gy, gx];
+            let s = std::f64::consts::FRAC_1_SQRT_2;
+            let [qw, qx, qy, qz] = imu_data.quat;
+            imu_data.quat = [
+                (qw - qy) * s,
+                (qx - qz) * s,
+                (qw + qy) * s,
+                (qx + qz) * s,
+            ];
         }
 
         // Apply pitch offset if specified (rotation around Y axis)
