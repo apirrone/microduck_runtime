@@ -1,30 +1,6 @@
 [target.aarch64-unknown-linux-gnu]
-pre-build = [
-    # ── Step 1: add ARM64 package support ─────────────────────────────────────
-    # cross ≥0.2.5 ships Ubuntu 20.04 images; on 20.04+ ARM64 packages live
-    # at ports.ubuntu.com rather than the main mirrors, so we need to add
-    # those sources before dpkg can resolve arm64 packages.
-    "dpkg --add-architecture arm64",
-    "bash -c 'source /etc/os-release; case $VERSION_ID in 20.04|22.04|24.04) sed -i \"s|^deb |deb [arch=amd64] |\" /etc/apt/sources.list; printf \"deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ $UBUNTU_CODENAME main restricted universe\\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ ${UBUNTU_CODENAME}-updates main restricted universe\\n\" >> /etc/apt/sources.list; echo \"[cross] Added ARM64 ports sources for Ubuntu $VERSION_ID\";; *) echo \"[cross] Ubuntu $VERSION_ID uses main mirrors for arm64\";; esac'",
-    "apt-get update -qq",
+image = "ghcr.io/apirrone/microduck-cross-aarch64:latest"
 
-    # ── Step 2: install libudev for the target ─────────────────────────────────
-    "apt-get install -y --no-install-recommends libudev-dev:arm64 libstdc++6:arm64",
-
-    # ── Step 3: create linker symlink (libudev.so.1 → libudev.so) ─────────────
-    "bash -c 'SO=$(find /usr/lib/aarch64-linux-gnu /lib/aarch64-linux-gnu -name \"libudev.so*\" 2>/dev/null | head -1); echo \"[cross] libudev found at: $SO\"; if [ -z \"$SO\" ]; then echo \"[cross] ERROR: libudev not installed\"; exit 1; fi; dir=$(dirname $SO); [ -f $dir/libudev.so ] || ln -sf $SO $dir/libudev.so; echo \"[cross] libudev.so -> $(readlink -f $dir/libudev.so)\"'",
-
-    # ── Step 4: write pkg-config descriptor ───────────────────────────────────
-    "mkdir -p /usr/lib/aarch64-linux-gnu/pkgconfig",
-    "printf 'prefix=/usr\\nexec_prefix=${prefix}\\nlibdir=${exec_prefix}/lib/aarch64-linux-gnu\\nincludedir=${prefix}/include\\n\\nName: libudev\\nDescription: Library to access udev device information\\nVersion: 1.0\\nLibs: -L${libdir} -ludev\\nCflags: -I${includedir}\\n' > /usr/lib/aarch64-linux-gnu/pkgconfig/libudev.pc",
-
-    # ── Step 5: cache dirs for ONNX Runtime download ──────────────────────────
-    "mkdir -p /.cache /root/.cache /tmp/.cache && chmod 777 /.cache /root/.cache /tmp/.cache",
-]
-
-# Make pkg-config look in the right place when cross-compiling.
-# PKG_CONFIG_PATH_<TARGET> is the target-specific variable used by the
-# pkg-config crate; PKG_CONFIG_ALLOW_CROSS lets it run without error.
 [target.aarch64-unknown-linux-gnu.env]
 set = { PKG_CONFIG_PATH_aarch64_unknown_linux_gnu = "/usr/lib/aarch64-linux-gnu/pkgconfig" }
 passthrough = ["PKG_CONFIG_ALLOW_CROSS"]
