@@ -346,9 +346,10 @@ struct Args {
     #[arg(long, default_value_t = 9873)]
     ball_detect_port: u16,
 
-    /// Proportional gain for ball-tracking head control (radians of offset per image-width error).
+    /// Proportional gain for ball-tracking head control.
+    /// 1.0 = head points directly at the ball; reduce if oscillatory.
     /// Flip the sign if the head moves in the wrong direction.
-    #[arg(long, default_value_t = 0.4)]
+    #[arg(long, default_value_t = 1.0)]
     ball_track_gain: f64,
 
     /// How long (seconds) to keep tracking the ball after it disappears from view.
