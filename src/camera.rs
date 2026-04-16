@@ -74,23 +74,6 @@ const IMX500_PP_CONFIG: &str = r#"{
 
 const PP_CONFIG_PATH: &str = "/tmp/microduck_imx500_pp.json";
 
-// ── COCO 80-class labels (SSD MobileNetV2 sorted order, 0-indexed) ────────────
-const COCO_LABELS: [&str; 80] = [
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-    "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag",
-    "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite",
-    "baseball bat", "baseball glove", "skateboard", "surfboard",
-    "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon",
-    "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot",
-    "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant",
-    "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote",
-    "keyboard", "cell phone", "microwave", "oven", "toaster", "sink",
-    "refrigerator", "book", "clock", "vase", "scissors", "teddy bear",
-    "hair drier", "toothbrush",
-];
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Manages the camera subprocess and publishes JPEG frames (and optionally
@@ -254,66 +237,45 @@ fn capture_loop(
 
 // ── Detection line parser ─────────────────────────────────────────────────────
 //
-// rpicam-apps imx500_object_detection prints detected objects to stderr when
-// --verbose 1 is set.  The format varies slightly by version; we handle the
-// most common patterns below.
+// rpicam-apps imx500_object_detection prints one line per detected object:
 //
-// Known formats:
-//   "  sports ball (0.870) : 100 200 50 50"           (pixel bbox)
-//   "  sports ball 0.870 : 100 200 50 50"             (no parens)
-//   "  sports ball 0.870 100 200 50 50"               (no colon)
-//   "[INFO] …  sports ball (0.870) : 100 200 50 50"   (with log prefix)
-//   "  sports ball (0.870) : [0.10, 0.20, 0.30, 0.40]" (normalised bbox)
+//   "[0] : sports ball[36] (0.38) @ 179,248 97x89"
+//
+// strip_log_prefix() consumes the "[0]" index, leaving:
+//
+//   ": sports ball[36] (0.38) @ 179,248 97x89"
 //
 // Returns a JSON object string like:
-//   {"class":"sports ball","score":0.87,"box":[100,200,50,50]}
+//   {"class":"sports ball","score":0.380,"box":[179.0,248.0,97.0,89.0]}
 
 fn parse_detection_line(line: &str) -> Option<String> {
-    // Strip common log prefixes: timestamps, "[INFO]", "INFO : ", etc.
     let s = strip_log_prefix(line.trim());
-    if s.is_empty() { return None; }
 
-    // We expect at least a label + a number somewhere in the line.
-    // Use a simple state machine: scan forward for a label (non-numeric
-    // prefix tokens), then a confidence float, then 4 bbox numbers.
+    // After stripping the "[N]" index prefix, detection lines start with ": "
+    let rest = s.strip_prefix(": ")?.trim();
+    // rest = "sports ball[36] (0.38) @ 179,248 97x89"
 
-    // Split on common delimiters
-    let tokens: Vec<&str> = s
-        .split(|c: char| c == '(' || c == ')' || c == ':' || c == '[' || c == ']' || c == ',')
-        .flat_map(|t| t.split_whitespace())
-        .collect();
+    // Split on " @ " to separate "label[id] (score)" from "x,y wxh"
+    let (label_score, coords_str) = rest.split_once(" @ ")?;
 
-    if tokens.len() < 6 {
-        return None;
-    }
+    // Extract label: everything before the "[class_id]" bracket
+    let bracket = label_score.rfind('[')?;
+    let label = label_score[..bracket].trim();
 
-    // Find first float that looks like a confidence score (0 < v ≤ 1)
-    let conf_pos = tokens.iter().position(|t| {
-        t.parse::<f32>().map(|v| (0.0..=1.0).contains(&v)).unwrap_or(false)
-    })?;
+    // Extract score from "(0.38)"
+    let p0 = label_score.find('(')?;
+    let p1 = label_score.find(')')?;
+    let score: f32 = label_score[p0 + 1..p1].trim().parse().ok()?;
 
-    if conf_pos == 0 {
-        return None; // no label prefix
-    }
+    // Parse "179,248 97x89"
+    let (xy_str, wh_str) = coords_str.trim().split_once(' ')?;
+    let (xs, ys) = xy_str.split_once(',')?;
+    let (ws, hs) = wh_str.split_once('x')?;
+    let x: f32 = xs.trim().parse().ok()?;
+    let y: f32 = ys.trim().parse().ok()?;
+    let w: f32 = ws.trim().parse().ok()?;
+    let h: f32 = hs.trim().parse().ok()?;
 
-    let label: String = tokens[..conf_pos].join(" ");
-    let score: f32 = tokens[conf_pos].parse().ok()?;
-
-    // Collect up to 4 numbers after the confidence for the bounding box
-    let mut bbox: Vec<f32> = Vec::new();
-    for tok in &tokens[conf_pos + 1..] {
-        if let Ok(v) = tok.parse::<f32>() {
-            bbox.push(v);
-            if bbox.len() == 4 { break; }
-        }
-    }
-    if bbox.len() < 4 {
-        return None;
-    }
-
-    let [x, y, w, h] = [bbox[0], bbox[1], bbox[2], bbox[3]];
-
-    // Validate the label is a known COCO class (or at least non-empty)
     if label.is_empty() { return None; }
 
     Some(format!(
