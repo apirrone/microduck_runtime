@@ -648,7 +648,9 @@ impl Runtime {
             pid_gains: (args.kp, args.ki, args.kd),
             pitch_offset: args.pitch_offset,
             last_action: [0.0; NUM_MOTORS],
-            command: [args.vel_x, args.vel_y, args.vel_z],
+            // In fold mode, initialize command to phase=0 (STAND target) so the fold
+            // policy sees a valid in-distribution command before B is first pressed.
+            command: if args.fold { [1.0, 0.0, 0.0] } else { [args.vel_x, args.vel_y, args.vel_z] },
             action_scale: args.action_scale,
             log_file,
             start_time: None,
@@ -1144,10 +1146,10 @@ impl Runtime {
         }
 
         // Fall detection: accel is projected gravity (unit vector, body frame).
-        // Standard microduck: z+ = up → upright means accel[2] ≈ -1.0.
-        // Fold robot IMU: x+ = up → upright means accel[0] ≈ -1.0.
+        // After the fold-mode axis remap above, accel is always in standard frame: z+ = up.
+        // Upright means accel[2] ≈ -1.0 for both standard and fold robots.
         // Debounce: only trigger after 0.2s of continuous detection.
-        let upright_axis = if self.fold_mode { 0 } else { 2 };
+        let upright_axis = 2usize;
         if self.battery_benchmark {
             // Benchmark fall detection: auto-recover via standing policy (command → 0)
             if self.benchmark_recovering {
