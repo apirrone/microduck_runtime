@@ -24,7 +24,7 @@ import mujoco.viewer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-PACKET_FLOATS = 36          # 4 quat + 15 joints + 15 currents + 2 odometry (x, y)
+PACKET_FLOATS = 39          # 4 quat + 15 joints + 15 currents + 2 odometry + 3 ball world pos
 PACKET_BYTES  = PACKET_FLOATS * 4
 
 
@@ -104,11 +104,14 @@ def _min_foot_world_z(data, foot_verts):
     return min_z
 
 
-# ── Reference square overlay ──────────────────────────────────────────────────
+# ── Overlay geometry helpers ──────────────────────────────────────────────────
 
 _SQUARE_RGBA  = np.array([1.0, 0.85, 0.0, 0.85], np.float32)
+_BALL_RGBA    = np.array([1.0, 0.6,  0.0, 0.9 ], np.float32)   # orange sphere
 _SQUARE_Z     = 0.008
 _IDENTITY_MAT = np.eye(3, dtype=np.float64).flatten()
+
+BALL_RADIUS   = 0.03   # 60 mm diameter
 
 
 def _rot_toward(dx: float, dy: float) -> np.ndarray:
@@ -122,9 +125,8 @@ def _rot_toward(dx: float, dy: float) -> np.ndarray:
     return np.column_stack([lx, ly, lz]).astype(np.float64)
 
 
-def _draw_reference_square(scn, cx: float = 0.0, cy: float = 0.0, half: float = 0.5):
-    """Draw a 1 m × 1 m yellow square centred at (cx, cy) at ground level."""
-    scn.ngeom = 0
+def _add_reference_square(scn, cx: float = 0.0, cy: float = 0.0, half: float = 0.5):
+    """Append a 1 m × 1 m yellow square centred at (cx, cy) at ground level."""
     corners = [
         (cx - half, cy - half),
         (cx + half, cy - half),
@@ -159,6 +161,21 @@ def _draw_reference_square(scn, cx: float = 0.0, cy: float = 0.0, half: float = 
             _SQUARE_RGBA,
         )
         scn.ngeom += 1
+
+
+def _add_ball_marker(scn, x: float, y: float, z: float):
+    """Append an orange sphere at the ball's world-frame position."""
+    if scn.ngeom >= scn.maxgeom:
+        return
+    g = scn.geoms[scn.ngeom]
+    mujoco.mjv_initGeom(
+        g, mujoco.mjtGeom.mjGEOM_SPHERE,
+        np.array([BALL_RADIUS, BALL_RADIUS, BALL_RADIUS], np.float64),
+        np.array([x, y, z], np.float64),
+        _IDENTITY_MAT,
+        _BALL_RGBA,
+    )
+    scn.ngeom += 1
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -217,6 +234,8 @@ def main():
             joints = floats[4:19]
             odo_x  = floats[34]
             odo_y  = floats[35]
+            ball_x, ball_y, ball_z = floats[36], floats[37], floats[38]
+            ball_valid = not (math.isnan(ball_x) or math.isnan(ball_y) or math.isnan(ball_z))
 
             # Set joint angles
             for i, name in enumerate(JOINT_NAMES):
@@ -242,7 +261,14 @@ def main():
                     data.qpos[freejoint_qpos_adr + 2] = -min_z
 
             mujoco.mj_kinematics(model, data)
-            _draw_reference_square(v.user_scn)
+
+            # Overlay: reference square + ball marker (if detected)
+            scn = v.user_scn
+            scn.ngeom = 0
+            _add_reference_square(scn)
+            if ball_valid:
+                _add_ball_marker(scn, ball_x, ball_y, ball_z)
+
             v.sync()
 
     sock.close()

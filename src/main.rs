@@ -307,7 +307,12 @@ struct Args {
     legs_low_pass_alpha: f64,
 
     /// Stream robot state over TCP for digital twin visualization.
-    /// Sends 36 × f32 LE (144 bytes/frame): [qw,qx,qy,qz] + [j0..j14] + [c0..c14] + [odo_x, odo_y].
+    /// Sends 39 × f32 LE (156 bytes/frame):
+    ///   [0..3]   IMU quaternion [w, x, y, z]
+    ///   [4..18]  joint positions (runtime motor order)
+    ///   [19..33] motor currents in mA
+    ///   [34..35] odometry x, y in metres
+    ///   [36..38] ball world position [x, y, z] in metres (NaN if not detected recently)
     #[arg(long)]
     stream: bool,
 
@@ -349,7 +354,7 @@ struct Args {
     /// Proportional gain for ball-tracking head control.
     /// 1.0 = head points directly at the ball; reduce if oscillatory.
     /// Flip the sign if the head moves in the wrong direction.
-    #[arg(long, default_value_t = 1.0)]
+    #[arg(long, default_value_t = 1.0, allow_hyphen_values = true)]
     ball_track_gain: f64,
 
     /// How long (seconds) to keep tracking the ball after it disappears from view.
@@ -1279,11 +1284,12 @@ impl Runtime {
             }
         }
 
-        // Digital twin streaming: send 36 × f32 LE per frame:
+        // Digital twin streaming: send 39 × f32 LE per frame:
         //   [0..3]   IMU quaternion [w, x, y, z]
         //   [4..18]  joint positions (runtime motor order)
         //   [19..33] motor currents in mA (same order)
-        //   [34..35] odometry x, y in metres (0.0 if no URDF loaded)
+        //   [34..35] odometry x, y in metres (0.0 if odometry not running)
+        //   [36..38] ball world position [x, y, z] in metres (NaN if not seen recently)
         if self.stream_listener.is_some() {
             // Accept a new client if we don't have one
             if self.stream_client.is_none() {
@@ -1299,8 +1305,19 @@ impl Runtime {
             // Send packet to connected client
             if let Some(client) = &mut self.stream_client {
                 let q = imu_data.quat;
-                let mut buf = [0u8; 36 * 4];
-                let floats: [f32; 36] = [
+                // Ball world position: NaN if not detected recently
+                let ball_valid = self.ball_world_pos.is_some()
+                    && self.ball_last_seen
+                        .map(|t| t.elapsed().as_secs_f64() < self.ball_memory_secs)
+                        .unwrap_or(false);
+                let ball = if ball_valid {
+                    let b = self.ball_world_pos.unwrap();
+                    [b[0] as f32, b[1] as f32, b[2] as f32]
+                } else {
+                    [f32::NAN, f32::NAN, f32::NAN]
+                };
+                let mut buf = [0u8; 39 * 4];
+                let floats: [f32; 39] = [
                     // [0..3]   IMU quaternion [w, x, y, z]
                     q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32,
                     // [4..18]  joint positions (runtime motor order)
@@ -1338,6 +1355,8 @@ impl Runtime {
                     // [34..35] odometry x, y in metres
                     self.odometry[0] as f32,
                     self.odometry[1] as f32,
+                    // [36..38] ball world position [x, y, z] (NaN if not seen recently)
+                    ball[0], ball[1], ball[2],
                 ];
                 for (i, f) in floats.iter().enumerate() {
                     buf[i*4..(i+1)*4].copy_from_slice(&f.to_le_bytes());
