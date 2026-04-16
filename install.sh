@@ -114,6 +114,7 @@ if [ -f "robot.urdf" ]; then
     echo -e "${GREEN}✓ URDF installed to $HOME/microduck/robot.urdf${NC}"
 fi
 
+
 # Install ONNX Runtime library
 ONNX_LIB_DIR="/usr/local/lib"
 if ls libonnxruntime.so* 1> /dev/null 2>&1; then

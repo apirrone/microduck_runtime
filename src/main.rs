@@ -335,6 +335,17 @@ struct Args {
     #[arg(long, default_value_t = 5u32)]
     cam_fps: u32,
 
+    /// Enable IMX500 onboard object detection (requires --stream).
+    /// Passes --post-process-file to rpicam-vid to run the SSD MobileNetV2
+    /// COCO model on-sensor; streams bounding-box JSON to --ball-detect-port.
+    /// Requires: sudo apt install imx500-all
+    #[arg(long)]
+    ball_detect: bool,
+
+    /// TCP port for ball-detection JSON stream (default: 9873, requires --ball-detect)
+    #[arg(long, default_value_t = 9873)]
+    ball_detect_port: u16,
+
 }
 
 
@@ -439,6 +450,9 @@ struct Runtime {
     jpeg_client: Option<std::net::TcpStream>,
     // Brain command socket (port 9872): UDP, receives [vx,vy,wz] as 3×f32 LE
     cmd_socket: Option<UdpSocket>,
+    // Ball-detection JSON stream (port 9873): newline-delimited JSON pushed to a client
+    detection_listener: Option<std::net::TcpListener>,
+    detection_client: Option<std::net::TcpStream>,
     // Background camera capture thread
     camera_stream: Option<camera::CameraStream>,
     // Latest velocity command received from the brain (applied when gamepad is idle)
@@ -793,10 +807,30 @@ impl Runtime {
             } else {
                 None
             },
+            detection_listener: if args.stream && args.ball_detect {
+                let addr = format!("0.0.0.0:{}", args.ball_detect_port);
+                let listener = std::net::TcpListener::bind(&addr)
+                    .with_context(|| format!("Failed to bind detection listener on {}", addr))?;
+                listener.set_nonblocking(true)
+                    .context("Failed to set detection listener non-blocking")?;
+                println!("Ball-detection stream listening on TCP port {}", args.ball_detect_port);
+                Some(listener)
+            } else {
+                None
+            },
+            detection_client: None,
             camera_stream: if args.stream {
-                println!("Starting camera capture ({}×{} @ {} fps) …",
-                    args.cam_width, args.cam_height, args.cam_fps);
-                Some(camera::CameraStream::start(args.cam_width, args.cam_height, args.cam_fps))
+                if args.ball_detect {
+                    println!("Starting camera + IMX500 ball detection ({}×{} @ {} fps) …",
+                        args.cam_width, args.cam_height, args.cam_fps);
+                } else {
+                    println!("Starting camera capture ({}×{} @ {} fps) …",
+                        args.cam_width, args.cam_height, args.cam_fps);
+                }
+                Some(camera::CameraStream::start(
+                    args.cam_width, args.cam_height, args.cam_fps,
+                    args.ball_detect,
+                ))
             } else {
                 None
             },
@@ -1316,6 +1350,34 @@ impl Runtime {
                     if !ok {
                         println!("Brain JPEG client disconnected");
                         self.jpeg_client = None;
+                    }
+                }
+            }
+        }
+
+        // ── Ball-detection JSON stream (port 9873) ────────────────────────────
+        if let Some(ref listener) = self.detection_listener {
+            if self.detection_client.is_none() {
+                if let Ok((stream, addr)) = listener.accept() {
+                    let _ = stream.set_nodelay(true);
+                    println!("Ball-detection client connected: {}", addr);
+                    self.detection_client = Some(stream);
+                }
+            }
+        }
+        if self.detection_client.is_some() {
+            if let Some(ref cam) = self.camera_stream {
+                let det = cam.latest_detections.lock().unwrap().take();
+                if let Some(json_line) = det {
+                    // Send newline-delimited JSON
+                    let mut payload = json_line.into_bytes();
+                    payload.push(b'\n');
+                    let ok = self.detection_client.as_mut()
+                        .map(|c| c.write_all(&payload).is_ok())
+                        .unwrap_or(false);
+                    if !ok {
+                        println!("Ball-detection client disconnected");
+                        self.detection_client = None;
                     }
                 }
             }
