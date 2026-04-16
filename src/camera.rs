@@ -162,26 +162,35 @@ fn capture_loop(
             thread::spawn(move || {
                 let reader = std::io::BufReader::new(stderr);
                 let mut pending: Vec<String> = Vec::new();
+                let mut last_flush = std::time::Instant::now();
 
                 for line in reader.lines().flatten() {
-                    // rpicam-apps prints "imx500_object_detection:" then one
-                    // line per object.  We buffer lines until we see the start
-                    // of the next block, then flush accumulated detections.
-                    if line.trim_start().starts_with("imx500_object_detection:") {
-                        // Flush previous batch
-                        if !pending.is_empty() {
-                            let json = format!("[{}]", pending.join(","));
+                    // Log EVERYTHING from rpicam-apps so the format is visible
+                    // in `journalctl -u microduck_runtime` for debugging.
+                    eprintln!("[rpicam] {line}");
+
+                    if let Some(det_json) = parse_detection_line(&line) {
+                        pending.push(det_json);
+                    }
+
+                    // Flush every ~200 ms regardless of header lines.
+                    // This also sends [] when no objects are detected, which
+                    // keeps the TCP connection alive on the viewer side.
+                    if last_flush.elapsed() >= Duration::from_millis(200) {
+                        let json = format!("[{}]", pending.join(","));
+                        {
                             let mut lock = det_buf.lock().unwrap();
                             *lock = Some(json);
-                            pending.clear();
                         }
-                    } else if let Some(det_json) = parse_detection_line(&line) {
-                        pending.push(det_json);
-                    } else if !line.trim().is_empty() {
-                        // Pass through other stderr messages so they appear in journalctl
-                        eprintln!("[rpicam] {line}");
+                        pending.clear();
+                        last_flush = std::time::Instant::now();
                     }
                 }
+
+                // Final flush when the process exits.
+                let json = format!("[{}]", pending.join(","));
+                let mut lock = det_buf.lock().unwrap();
+                *lock = Some(json);
             });
         }
     }
