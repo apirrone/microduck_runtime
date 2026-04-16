@@ -1579,6 +1579,26 @@ impl Runtime {
             }
         }
 
+        // ── Build walking observation (used for logging and normal walking policy) ──
+        let observation = if self.motorized_wheel_mode {
+            Observation::new_motorized_wheel(
+                &imu_data,
+                obs_command,
+                &motor_state,
+                &self.last_action,
+                &self.default_positions,
+            )
+        } else {
+            Observation::new(
+                &imu_data,
+                obs_command,
+                &motor_state,
+                &self.last_action,
+                &self.default_positions,
+                self.mouth_enabled,
+            )
+        };
+
         // ── Kick-ball policy (overrides walking policy when loaded) ──────────────
         // Build a 54D kick-ball observation and run the dedicated ONNX model.
         // Ball position defaults to [0,0,0] (body frame) when not yet detected.
@@ -1607,25 +1627,6 @@ impl Runtime {
             }
         } else {
             // ── Normal walking/standing policy ────────────────────────────────
-            let observation = if self.motorized_wheel_mode {
-                Observation::new_motorized_wheel(
-                    &imu_data,
-                    obs_command,
-                    &motor_state,
-                    &self.last_action,
-                    &self.default_positions,
-                )
-            } else {
-                Observation::new(
-                    &imu_data,
-                    obs_command,
-                    &motor_state,
-                    &self.last_action,
-                    &self.default_positions,
-                    self.mouth_enabled,
-                )
-            };
-
             if self.policy_enabled {
                 self.policy.infer(&observation, effective_command, self.mouth_enabled)
                     .context("Failed to run policy inference")?
