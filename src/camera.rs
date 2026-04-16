@@ -45,10 +45,29 @@ pub type DetectionBuffer = Arc<Mutex<Option<String>>>;
 const IMX500_PP_CONFIG: &str = r#"{
     "imx500_object_detection": {
         "network_file": "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk",
-        "labels_file":  "/usr/share/imx500-models/coco_labels.txt",
         "threshold":     0.3,
-        "iou_threshold": 0.45,
-        "max_detections":       10
+        "max_detections": 10,
+        "temporal_filter": {
+            "tolerance": 0.1,
+            "factor": 0.2,
+            "visible_frames": 4,
+            "hidden_frames": 2
+        },
+        "classes": [
+            "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+            "truck", "boat", "traffic light", "fire hydrant", "-", "stop sign",
+            "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+            "elephant", "bear", "zebra", "giraffe", "-", "backpack", "umbrella",
+            "-", "-", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
+            "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
+            "surfboard", "tennis racket", "bottle", "-", "wine glass", "cup", "fork",
+            "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+            "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+            "couch", "potted plant", "bed", "-", "dining table", "-", "-", "toilet",
+            "-", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone",
+            "microwave", "oven", "toaster", "sink", "refrigerator", "-", "book",
+            "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
+        ]
     }
 }
 "#;
