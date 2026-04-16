@@ -46,7 +46,7 @@ const IMX500_PP_CONFIG: &str = r#"{
     "imx500_object_detection": {
         "network_file": "/usr/share/imx500-models/imx500_network_ssd_mobilenetv2_fpnlite_320x320_pp.rpk",
         "labels_file":  "/usr/share/imx500-models/coco_labels.txt",
-        "confidence_threshold": 0.4,
+        "confidence_threshold": 0.15,
         "iou_threshold":        0.3,
         "max_detections":       10
     }
