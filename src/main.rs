@@ -387,6 +387,11 @@ struct Args {
     #[arg(long)]
     no_ball_track: bool,
 
+    /// Use the torso camera (physically mounted 90° CW) instead of the default head camera
+    /// (physically mounted upside-down / 180°).
+    #[arg(long)]
+    torso_camera: bool,
+
 }
 
 
@@ -430,6 +435,7 @@ struct Runtime {
     ball_last_seen: Option<Instant>,   // When the ball was last detected
     ball_memory_secs: f64,             // How long to remember ball position after losing sight of it
     ball_bbox_scale: f64,              // Bbox inflation factor for depth/Z estimation
+    torso_camera: bool,                // Use torso cam (90° CW) instead of default head cam (180°)
     ball_kick_policy: Option<Policy>,  // Kick-ball policy (replaces walking when loaded)
     kick_speed: f64,                   // Target kick speed (m/s) fed to kick-ball policy
     ball_track: bool,                  // Whether to move the head toward the detected ball
@@ -769,6 +775,7 @@ impl Runtime {
             ball_last_seen: None,
             ball_memory_secs: args.ball_memory_secs,
             ball_bbox_scale: args.ball_bbox_scale,
+            torso_camera: args.torso_camera,
             ball_kick_policy: if let Some(ref path) = args.ball_kick {
                 let expanded = if path.starts_with("~/") {
                     format!("{}/{}", std::env::var("HOME").unwrap_or_default(), &path[2..])
@@ -1467,7 +1474,7 @@ impl Runtime {
             // ── Ball world-frame update ───────────────────────────────────────
             // If the camera sees the ball, convert its trunk-frame position to
             // world frame via odometry and store it for persistence.
-            if let Some(ball_trunk) = extract_ball_trunk_pos(json_line, self.ball_bbox_scale) {
+            if let Some(ball_trunk) = extract_ball_trunk_pos(json_line, self.ball_bbox_scale, self.torso_camera) {
                 let ball_world = trunk_pos_to_world(ball_trunk, self.odometry, imu_data.quat);
                 self.ball_world_pos = Some(ball_world);
                 self.ball_last_seen = Some(Instant::now());
@@ -2167,11 +2174,14 @@ impl Runtime {
 /// Pi AI Camera (IMX500) at 640×480: estimated focal length ≈ 280 px
 /// (derived from 2.75 mm lens / 6.287 mm sensor width / 2028 px full-res, scaled to 640 px).
 ///
-/// Torso camera in trunk_base (from robot_walk.xml):
-///   pos  = (0.0506, 0.0, 0.0305)
-///   quat = (0.5, 0.5, -0.5, -0.5) → R = [[0,0,-1],[-1,0,0],[0,1,0]]
-///   image-right = trunk -Y, image-up = trunk +Z, optical axis = trunk +X
-fn extract_ball_trunk_pos(json: &str, bbox_scale: f64) -> Option<[f64; 3]> {
+/// Head camera (default): mounted upside-down (180°) in head_base_plate.
+///   Approx pos in trunk_base (neutral head) ≈ (0.04, 0.0, 0.115)
+///   image-right = trunk +Y (left), image-down = trunk +Z (up)
+///
+/// Torso camera (--torso-camera): mounted 90° CW in trunk_base.
+///   pos = (0.0506, 0.0, 0.0305), optical axis = trunk +X
+///   raw cx → trunk Z, raw cy → trunk Y (negated)
+fn extract_ball_trunk_pos(json: &str, bbox_scale: f64, torso_camera: bool) -> Option<[f64; 3]> {
     const TARGET_CLASSES: [&str; 2] = ["sports ball", "apple"];
     const FX: f64 = 280.0;
     const FY: f64 = 280.0;
@@ -2211,20 +2221,24 @@ fn extract_ball_trunk_pos(json: &str, bbox_scale: f64) -> Option<[f64; 3]> {
     let apparent_px = (bw.max(bh) / bbox_scale).max(1.0);
     let z_depth = FX * BALL_DIAMETER / apparent_px; // depth along camera optical axis
 
-    // The camera is physically mounted rotated 90° CW; view_camera.py rotates 90° CCW
-    // to correct the display.  Detection bounding boxes are in RAW sensor coordinates,
-    // so the axes are swapped relative to a normally-mounted camera:
-    //   raw cx (horizontal in raw) → physical UP/DOWN  → trunk Z
-    //   raw cy (vertical in raw)   → physical LEFT/RIGHT → trunk Y
-    //
-    // After the 90° CCW display rotation: display_x = raw cy, display_y = 639 - raw cx
-    //   → trunk_y driven by (cy - CY_IMG):  cy > 240 = display right = trunk -Y (robot right)
-    //   → trunk_z driven by (cx - CX_IMG):  cx > 320 = display up    = trunk +Z (up)
-    Some([
-        0.0506 + z_depth,
-        0.0    - (cy - CY_IMG) / FY * z_depth,
-        0.0305 + (cx - CX_IMG) / FX * z_depth,
-    ])
+    if torso_camera {
+        // Torso camera: physically 90° CW.  Raw sensor axes are swapped:
+        //   raw cx (horizontal) → trunk Z,  raw cy (vertical) → trunk Y (negated)
+        Some([
+            0.0506 + z_depth,
+            0.0    - (cy - CY_IMG) / FY * z_depth,
+            0.0305 + (cx - CX_IMG) / FX * z_depth,
+        ])
+    } else {
+        // Head camera (default): physically upside-down (180°).
+        //   image right (+cx) → trunk +Y (physical left)
+        //   image down  (+cy) → trunk +Z (physical up)
+        Some([
+            0.04 + z_depth,
+            (cx - CX_IMG) / FX * z_depth,
+            0.115 + (cy - CY_IMG) / FY * z_depth,
+        ])
+    }
 }
 
 /// Rotate vector `v` by unit quaternion `q = [w, x, y, z]` using Rodrigues formula.
