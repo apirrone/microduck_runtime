@@ -1458,6 +1458,9 @@ impl Runtime {
         let latest_det = self.camera_stream.as_ref()
             .and_then(|cam| cam.latest_detections.lock().unwrap().take());
 
+        // Raw pixel centre of best ball detection this step (head camera only).
+        let mut ball_pixel_this_step: Option<(f64, f64)> = None;
+
         if let Some(ref json_line) = latest_det {
             // ── TCP stream to viewer ──────────────────────────────────────────
             if self.detection_client.is_some() {
@@ -1472,19 +1475,38 @@ impl Runtime {
                 }
             }
             // ── Ball world-frame update ───────────────────────────────────────
-            // If the camera sees the ball, convert its trunk-frame position to
-            // world frame via odometry and store it for persistence.
-            if let Some(ball_trunk) = extract_ball_trunk_pos(json_line, self.ball_bbox_scale, self.torso_camera) {
+            // Unproject to trunk_base (FK for head cam, analytic for torso cam),
+            // then lift to world frame for odometry-corrected memory.
+            let head_joints = [
+                motor_state.positions[5], // neck_pitch
+                motor_state.positions[6], // head_pitch
+                motor_state.positions[7], // head_yaw
+                motor_state.positions[8], // head_roll
+            ];
+            if let Some((ball_trunk, cx, cy)) =
+                extract_ball_trunk_pos(json_line, self.ball_bbox_scale, self.torso_camera, head_joints)
+            {
                 let ball_world = trunk_pos_to_world(ball_trunk, self.odometry, imu_data.quat);
                 self.ball_world_pos = Some(ball_world);
                 self.ball_last_seen = Some(Instant::now());
+                if !self.torso_camera {
+                    ball_pixel_this_step = Some((cx, cy));
+                }
             }
         }
 
-        // ── Head tracking (uses world-frame memory, corrected by odometry) ────
-        // Runs as long as the ball was seen recently, unless --no-ball-track is set.
+        // ── Head tracking ─────────────────────────────────────────────────────
         if self.ball_track {
-            if let Some(ball_world) = self.ball_world_pos {
+            if let Some((cx, cy)) = ball_pixel_this_step {
+                // Head camera, live detection: pixel-space servoing closes the loop
+                // regardless of current head angle.
+                apply_head_tracking_pixel(
+                    &mut self.head_offsets, cx, cy,
+                    self.ball_track_gain, self.head_alpha,
+                );
+            } else if let Some(ball_world) = self.ball_world_pos {
+                // Torso camera (always) or head camera in memory mode:
+                // project stored world position back to trunk frame.
                 let age_secs = self.ball_last_seen
                     .map(|t| t.elapsed().as_secs_f64())
                     .unwrap_or(f64::MAX);
@@ -2151,37 +2173,100 @@ impl Runtime {
     }
 }
 
-// ── Ball tracking (FK-based, torso camera) ────────────────────────────────────
-//
-// The torso camera is fixed to trunk_base — moving the head doesn't change what
-// it sees, so image-based visual servoing doesn't close the loop.  Instead:
-//
-//  1. Estimate ball 3D position in trunk_base frame using the pinhole camera
-//     model + known ball diameter (60 mm).
-//  2. Compute the azimuth and elevation of the ball from the neck joint.
-//  3. Set head_yaw / head_pitch offsets to point the head at that position.
-//
-// Torso camera (from robot_walk.xml):
-//   pos  = (0.0506, 0, 0.0305) in trunk_base
-//   quat = (0.5, 0.5, -0.5, -0.5)  →  looks in trunk +X, image-right = trunk -Y,
-//                                       image-up = trunk +Z
-//
-// Signs for head_yaw / head_pitch depend on motor zero conventions.
-// Use --ball-track-gain with a negative value to invert if head moves wrong way.
-/// Parse detection JSON and return the ball's 3-D position [x, y, z] in the
-/// trunk_base frame, or `None` if no sports-ball / apple is present.
+// ── FK helpers (quaternion + rigid-body transforms) ──────────────────────────
+
+/// Multiply two unit quaternions [w, x, y, z].
+#[inline]
+fn quat_mul(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
+    let [aw, ax, ay, az] = a;
+    let [bw, bx, by, bz] = b;
+    [
+        aw*bw - ax*bx - ay*by - az*bz,
+        aw*bx + ax*bw + ay*bz - az*by,
+        aw*by - ax*bz + ay*bw + az*bx,
+        aw*bz + ax*by - ay*bx + az*bw,
+    ]
+}
+
+/// Quaternion for a rotation of `theta` radians around the Z axis.
+#[inline]
+fn quat_rz(theta: f64) -> [f64; 4] {
+    let h = theta * 0.5;
+    [h.cos(), 0.0, 0.0, h.sin()]
+}
+
+/// Compose two rigid-body transforms: apply (tb, qb) first, then (ta, qa).
+#[inline]
+fn compose_tf(ta: [f64; 3], qa: [f64; 4], tb: [f64; 3], qb: [f64; 4]) -> ([f64; 3], [f64; 4]) {
+    let r = quat_rotate(tb, qa);
+    ([ta[0]+r[0], ta[1]+r[1], ta[2]+r[2]], quat_mul(qa, qb))
+}
+
+/// Forward kinematics for the head camera site.
 ///
-/// Pi AI Camera (IMX500) at 640×480: estimated focal length ≈ 280 px
-/// (derived from 2.75 mm lens / 6.287 mm sensor width / 2028 px full-res, scaled to 640 px).
+/// Chain from robot_walk.xml (MJCF): each body contributes
+///   T_i = (pos_i, quat_i * Rz(q_i))   — joint rotates around local Z
 ///
-/// Head camera (default): mounted upside-down (180°) in head_base_plate.
-///   Approx pos in trunk_base (neutral head) ≈ (0.04, 0.0, 0.115)
-///   image-right = trunk +Y (left), image-down = trunk +Z (up)
+/// The camera site is fixed inside head_base_plate (no extra joint).
+/// `joints` = [neck_pitch, head_pitch, head_yaw, head_roll] in radians.
+/// Returns (cam_pos_in_trunk, q_cam_in_trunk) [w,x,y,z].
+fn head_camera_fk(joints: [f64; 4]) -> ([f64; 3], [f64; 4]) {
+    let [q_neck, q_hpitch, q_hyaw, q_hroll] = joints;
+
+    // neck_pitch body: pos, quat [w,x,y,z]
+    let (t, q) = (
+        [0.0375202_f64, 0.0146, 0.0552],
+        quat_mul([0.0, 0.0, 0.707107, 0.707107], quat_rz(q_neck)),
+    );
+    // head_pitch body (identity static quat)
+    let (t, q) = compose_tf(t, q,
+        [0.0, 0.06, 0.0],
+        quat_mul([1.0, 0.0, 0.0, 0.0], quat_rz(q_hpitch)));
+    // head_yaw body
+    let (t, q) = compose_tf(t, q,
+        [0.0, 0.0465, -0.0145],
+        quat_mul([0.0, 0.0, -0.707107, 0.707107], quat_rz(q_hyaw)));
+    // head_roll body
+    let (t, q) = compose_tf(t, q,
+        [0.0305, 0.0, 0.0145],
+        quat_mul([0.5, -0.5, 0.5, -0.5], quat_rz(q_hroll)));
+    // camera site (fixed — MJCF quat "0.5 -0.5 -0.5 -0.5")
+    compose_tf(t, q, [0.0, 0.003, 0.0394], [0.5, -0.5, -0.5, -0.5])
+}
+
+// ── Ball tracking ─────────────────────────────────────────────────────────────
+//
+// Two camera modes:
+//
+// Torso camera (--torso-camera, fixed in trunk_base, mounted 90° CW):
+//   Raw sensor axes are swapped.  Ball 3-D position is computed analytically
+//   and the head is pointed at that trunk-frame direction (azimuth + elevation
+//   from the neck origin).  apply_head_tracking() always runs.
+//
+// Head camera (default, upside-down / 180° flip, moves with head joints):
+//   1. head_camera_fk() gives the camera pose in trunk_base for the current
+//      joint angles (robot_walk.xml chain).
+//   2. Pixel coordinates are unprojected through the FK → accurate ball
+//      trunk-frame position for the kick policy / world-frame memory.
+//   3. HEAD TRACKING uses direct pixel-space servoing: drive (cx,cy) to centre.
+//      This closes the loop correctly regardless of current head angle.
+//      In memory mode (ball not currently visible), fall back to trunk-frame
+//      apply_head_tracking() using the last stored world position.
+//
+// Camera intrinsics — IMX500 at 640×480, FX = FY ≈ 280 px
+//   (2.75 mm lens / 6.287 mm sensor width / 2028 px full-res, scaled to 640 px)
+
+/// Parse detection JSON, unproject the best ball to trunk_base using FK.
+/// Returns `(ball_trunk_pos, cx_raw, cy_raw)`, or `None` if no ball detected.
 ///
-/// Torso camera (--torso-camera): mounted 90° CW in trunk_base.
-///   pos = (0.0506, 0.0, 0.0305), optical axis = trunk +X
-///   raw cx → trunk Z, raw cy → trunk Y (negated)
-fn extract_ball_trunk_pos(json: &str, bbox_scale: f64, torso_camera: bool) -> Option<[f64; 3]> {
+/// `head_joints` = [neck_pitch, head_pitch, head_yaw, head_roll] from motor state.
+/// Ignored when `torso_camera = true`.
+fn extract_ball_trunk_pos(
+    json: &str,
+    bbox_scale: f64,
+    torso_camera: bool,
+    head_joints: [f64; 4],
+) -> Option<([f64; 3], f64, f64)> {
     const TARGET_CLASSES: [&str; 2] = ["sports ball", "apple"];
     const FX: f64 = 280.0;
     const FY: f64 = 280.0;
@@ -2216,29 +2301,51 @@ fn extract_ball_trunk_pos(json: &str, bbox_scale: f64, torso_camera: bool) -> Op
     let [bx, by, bw, bh] = best_box?;
     let cx = bx + bw / 2.0;
     let cy = by + bh / 2.0;
-    // Divide by bbox_scale to correct for SSD padding: bbox is typically ~20% larger
-    // than the actual ball, making it appear bigger (closer/higher) than it is.
+    // Divide by bbox_scale to correct for SSD over-padding (~20% larger than actual ball).
     let apparent_px = (bw.max(bh) / bbox_scale).max(1.0);
-    let z_depth = FX * BALL_DIAMETER / apparent_px; // depth along camera optical axis
+    let z_depth = FX * BALL_DIAMETER / apparent_px; // depth along optical axis
 
-    if torso_camera {
-        // Torso camera: physically 90° CW.  Raw sensor axes are swapped:
-        //   raw cx (horizontal) → trunk Z,  raw cy (vertical) → trunk Y (negated)
-        Some([
+    let ball_trunk = if torso_camera {
+        // Torso camera: 90° CW mount.  cx → trunk Z,  cy → trunk Y (negated).
+        [
             0.0506 + z_depth,
-            0.0    - (cy - CY_IMG) / FY * z_depth,
+            -(cy - CY_IMG) / FY * z_depth,
             0.0305 + (cx - CX_IMG) / FX * z_depth,
-        ])
+        ]
     } else {
-        // Head camera (default): physically upside-down (180°).
-        //   image right (+cx) → trunk +Y (physical left)
-        //   image down  (+cy) → trunk +Z (physical up)
-        Some([
-            0.04 + z_depth,
-            (cx - CX_IMG) / FX * z_depth,
-            0.115 + (cy - CY_IMG) / FY * z_depth,
-        ])
-    }
+        // Head camera: upside-down (180°).  FK gives the actual camera pose.
+        // The MJCF site quat is for right-side-up mount, so negate dx/dy to
+        // account for the 180° physical flip around the optical axis.
+        let (cam_pos, q_cam) = head_camera_fk(head_joints);
+        let dx = -(cx - CX_IMG) / FX;
+        let dy = -(cy - CY_IMG) / FY;
+        let rotated = quat_rotate([dx * z_depth, dy * z_depth, z_depth], q_cam);
+        [cam_pos[0] + rotated[0], cam_pos[1] + rotated[1], cam_pos[2] + rotated[2]]
+    };
+
+    Some((ball_trunk, cx, cy))
+}
+
+/// Head-camera pixel-space visual servo: drive (cx, cy) toward image centre.
+///
+/// Bypasses the trunk-frame coordinate system entirely, so the loop converges
+/// correctly regardless of current head angle.  Sign convention: with
+/// `gain = -1.0` (default), the head moves toward the ball on both axes.
+fn apply_head_tracking_pixel(
+    head_offsets: &mut [f64; 4],
+    cx: f64, cy: f64,
+    gain: f64, alpha: f64,
+) {
+    const FX: f64 = 280.0;
+    const FY: f64 = 280.0;
+    const CX_IMG: f64 = 320.0;
+    const CY_IMG: f64 = 240.0;
+    // Upside-down camera axis signs match the torso-camera trunk-frame signs,
+    // so --ball-track-gain -1.0 works for both cameras without modification.
+    let yaw_target   = gain * (cx - CX_IMG) / FX;
+    let pitch_target = gain * (cy - CY_IMG) / FY;
+    head_offsets[2] += alpha * (yaw_target   - head_offsets[2]);
+    head_offsets[1] += alpha * (pitch_target - head_offsets[1]);
 }
 
 /// Rotate vector `v` by unit quaternion `q = [w, x, y, z]` using Rodrigues formula.
