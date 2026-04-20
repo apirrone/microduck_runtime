@@ -92,7 +92,7 @@ impl CameraStream {
     /// * `ball_detect` — when `true`, pass `--post-process-file` to rpicam-vid
     ///   so the IMX500 runs onboard inference; parse detection lines from stderr.
     pub fn start(width: u32, height: u32, fps: u32,
-                 shutter_us: u32,
+                 shutter_us: u32, gain: f32,
                  ball_detect: bool) -> Self {
         let latest_frame: FrameBuffer          = Arc::new(Mutex::new(None));
         let latest_detections: DetectionBuffer = Arc::new(Mutex::new(None));
@@ -103,7 +103,7 @@ impl CameraStream {
         thread::spawn(move || {
             loop {
                 if let Err(e) = capture_loop(
-                    width, height, fps, shutter_us, ball_detect,
+                    width, height, fps, shutter_us, gain, ball_detect,
                     Arc::clone(&frame_buf),
                     Arc::clone(&det_buf),
                 ) {
@@ -122,7 +122,7 @@ impl CameraStream {
 
 fn capture_loop(
     width: u32, height: u32, fps: u32,
-    shutter_us: u32,
+    shutter_us: u32, gain: f32,
     ball_detect: bool,
     buf: FrameBuffer,
     det: DetectionBuffer,
@@ -146,14 +146,17 @@ fn capture_loop(
               "--width", &w, "--height", &h, "--framerate", &f,
               "--nopreview", "--timeout", "0"]);
 
-    // Manual shutter: disables AGC and caps exposure. Gain compensates so
-    // frames stay reasonably bright — but very low shutter needs good light.
+    // Manual shutter: disables AGC and caps exposure. Pair with gain so
+    // frames stay reasonably bright — very low shutter needs good light
+    // or a high gain (at the cost of noise).
     let shutter_str;
+    let gain_str;
     if shutter_us > 0 {
         shutter_str = shutter_us.to_string();
-        cmd.args(["--shutter", &shutter_str, "--gain", "4.0",
+        gain_str = format!("{:.1}", gain);
+        cmd.args(["--shutter", &shutter_str, "--gain", &gain_str,
                   "--awb", "auto"]);
-        eprintln!("[camera] manual shutter: {} µs (gain 4.0)", shutter_us);
+        eprintln!("[camera] manual shutter: {} µs, gain {}", shutter_us, gain_str);
     }
 
     if ball_detect {

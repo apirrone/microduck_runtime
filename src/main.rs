@@ -347,6 +347,12 @@ struct Args {
     #[arg(long, default_value_t = 0u32)]
     cam_shutter_us: u32,
 
+    /// Analog gain to pair with --cam-shutter-us (rpicam-vid --gain).
+    /// Ignored unless --cam-shutter-us > 0. Default 4.0 is a mild lift;
+    /// try 6–10 for dim indoor rooms (trades noise for brightness).
+    #[arg(long, default_value_t = 4.0f32)]
+    cam_gain: f32,
+
     /// Enable IMX500 onboard object detection (requires --stream).
     /// Passes --post-process-file to rpicam-vid to run the SSD MobileNetV2
     /// COCO model on-sensor; streams bounding-box JSON to --ball-detect-port.
@@ -916,7 +922,7 @@ impl Runtime {
                 }
                 Some(camera::CameraStream::start(
                     args.cam_width, args.cam_height, args.cam_fps,
-                    args.cam_shutter_us,
+                    args.cam_shutter_us, args.cam_gain,
                     need_detect,
                 ))
             } else {
