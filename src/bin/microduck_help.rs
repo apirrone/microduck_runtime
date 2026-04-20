@@ -16,6 +16,9 @@ fn main() {
     println!();
     println!("  em                  Emergency stop: disable torque on all motors.");
     println!();
+    println!("  la_poule            Chicken-head trick: init pose, then stabilise head");
+    println!("                      orientation (roll/pitch/yaw) using the body IMU.");
+    println!();
     println!("  check_voltage       Read and print the voltage reported by each");
     println!("                      motor.");
     println!();

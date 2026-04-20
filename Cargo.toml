@@ -51,6 +51,10 @@ path = "src/bin/debug_bno08x.rs"
 name = "reboot_motors"
 path = "src/bin/reboot_motors.rs"
 
+[[bin]]
+name = "la_poule"
+path = "src/bin/la_poule.rs"
+
 [dependencies]
 rustypot = "1.4.2"
 ort = { version = "2.0.0-rc.11", features = ["load-dynamic"], default-features = false }
