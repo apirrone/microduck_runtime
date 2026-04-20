@@ -22,8 +22,11 @@ import os
 import numpy as np
 from odometry import MicroduckOdometry
 
-PACKET_FLOATS = 34   # 4 quat + 15 joints + 15 currents
-PACKET_BYTES  = PACKET_FLOATS * 4
+# Runtime packet: 8 B f64 timestamp header + 41 × f32 LE (172 B total).
+# This sidecar only needs the first 34 f32 slots (quat + joints + currents).
+PACKET_TOTAL_FLOATS = 41
+PACKET_BYTES = 8 + PACKET_TOTAL_FLOATS * 4
+PACKET_FLOATS = 34
 
 
 def recv_exact(sock, n):
@@ -78,7 +81,8 @@ def main():
             tcp = connect(args.host, args.port)
             continue
 
-        floats = struct.unpack_from(f"<{PACKET_FLOATS}f", raw)
+        # Skip 8 B f64 timestamp header; only unpack the first PACKET_FLOATS slots.
+        floats = struct.unpack_from(f"<{PACKET_FLOATS}f", raw, 8)
         imu_quat  = floats[0:4]
         joints    = floats[4:19]
         currents  = floats[19:34]

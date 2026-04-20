@@ -497,6 +497,10 @@ struct Runtime {
     legs_low_pass: bool,
     legs_low_pass_alpha: f64,
     legs_low_pass_prev: [f64; 10],  // previous filtered targets for left leg (0-4) and right leg (10-14)
+    // Shared monotonic epoch for all stream timestamps (digital-twin + JPEG).
+    // Captured at Runtime::new() so server-side maploc can time-align the
+    // two streams from a single reference clock.
+    stream_epoch: Instant,
     // Digital twin TCP stream
     stream_listener: Option<std::net::TcpListener>,
     stream_client: Option<std::net::TcpStream>,
@@ -723,6 +727,7 @@ impl Runtime {
             action_scale: args.action_scale,
             log_file,
             start_time: None,
+            stream_epoch: Instant::now(),
             step_counter: 0,
             record_file: args.record.clone(),
             recorded_observations: Vec::new(),
@@ -1333,12 +1338,18 @@ impl Runtime {
             }
         }
 
-        // Digital twin streaming: send 39 × f32 LE per frame:
-        //   [0..3]   IMU quaternion [w, x, y, z]
-        //   [4..18]  joint positions (runtime motor order)
-        //   [19..33] motor currents in mA (same order)
-        //   [34..35] odometry x, y in metres (0.0 if odometry not running)
-        //   [36..38] ball world position [x, y, z] in metres (NaN if not seen recently)
+        // Digital twin streaming: send 8 B timestamp + 41 × f32 LE per frame
+        // (172 bytes total). Shared monotonic epoch lets server-side maploc
+        // time-align this stream against the JPEG stream (same epoch).
+        //
+        //   [0..8]     f64 LE  timestamp_s (seconds since stream_epoch)
+        //   [8..24]    f32[4]  IMU quaternion [w, x, y, z]
+        //   [24..84]   f32[15] joint positions (runtime motor order)
+        //   [84..144]  f32[15] motor currents in mA
+        //   [144..152] f32[2]  odometry x, y (m)
+        //   [152..164] f32[3]  ball world x, y, z (m), NaN if stale
+        //   [164..168] f32     odometry z (m)
+        //   [168..172] f32     odometry yaw (rad)
         if self.stream_listener.is_some() {
             // Accept a new client if we don't have one
             if self.stream_client.is_none() {
@@ -1365,11 +1376,11 @@ impl Runtime {
                 } else {
                     [f32::NAN, f32::NAN, f32::NAN]
                 };
-                let mut buf = [0u8; 39 * 4];
-                let floats: [f32; 39] = [
-                    // [0..3]   IMU quaternion [w, x, y, z]
+                let ts_s: f64 = self.stream_epoch.elapsed().as_secs_f64();
+                let mut buf = [0u8; 8 + 41 * 4];
+                buf[0..8].copy_from_slice(&ts_s.to_le_bytes());
+                let floats: [f32; 41] = [
                     q[0] as f32, q[1] as f32, q[2] as f32, q[3] as f32,
-                    // [4..18]  joint positions (runtime motor order)
                     motor_state.positions[0] as f32,
                     motor_state.positions[1] as f32,
                     motor_state.positions[2] as f32,
@@ -1385,7 +1396,6 @@ impl Runtime {
                     motor_state.positions[12] as f32,
                     motor_state.positions[13] as f32,
                     motor_state.positions[14] as f32,
-                    // [19..33] motor currents in mA (same order)
                     motor_state.currents_ma[0] as f32,
                     motor_state.currents_ma[1] as f32,
                     motor_state.currents_ma[2] as f32,
@@ -1401,14 +1411,15 @@ impl Runtime {
                     motor_state.currents_ma[12] as f32,
                     motor_state.currents_ma[13] as f32,
                     motor_state.currents_ma[14] as f32,
-                    // [34..35] odometry x, y in metres
                     self.odometry[0] as f32,
                     self.odometry[1] as f32,
-                    // [36..38] ball world position [x, y, z] (NaN if not seen recently)
                     ball[0], ball[1], ball[2],
+                    self.odometry[2] as f32,
+                    self.odometry[3] as f32,
                 ];
                 for (i, f) in floats.iter().enumerate() {
-                    buf[i*4..(i+1)*4].copy_from_slice(&f.to_le_bytes());
+                    let start = 8 + i * 4;
+                    buf[start..start + 4].copy_from_slice(&f.to_le_bytes());
                 }
                 if client.write_all(&buf).is_err() {
                     println!("Digital twin client disconnected");
@@ -1432,9 +1443,15 @@ impl Runtime {
                 // Consume the latest frame (None = no new frame since last send)
                 let frame = cam.latest_frame.lock().unwrap().take();
                 if let Some(jpeg) = frame {
+                    // Framing: [f64 LE timestamp_s] [u32 LE length] [jpeg bytes].
+                    // timestamp_s shares stream_epoch with the digital-twin packet,
+                    // which lets the server align poses to frames from a single clock.
+                    let ts_bytes = self.stream_epoch.elapsed().as_secs_f64().to_le_bytes();
                     let len_bytes = (jpeg.len() as u32).to_le_bytes();
                     let ok = self.jpeg_client.as_mut().map(|c| {
-                        c.write_all(&len_bytes).is_ok() && c.write_all(&jpeg).is_ok()
+                        c.write_all(&ts_bytes).is_ok()
+                            && c.write_all(&len_bytes).is_ok()
+                            && c.write_all(&jpeg).is_ok()
                     }).unwrap_or(false);
                     if !ok {
                         println!("Brain JPEG client disconnected");

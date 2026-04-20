@@ -2,11 +2,15 @@
 Digital twin viewer for microduck.
 
 Connects to the runtime's TCP stream (--stream --stream-port PORT),
-receives 36 × f32 LE per frame:
-  [0..3]   IMU quaternion [w, x, y, z]
-  [4..18]  joint positions (runtime motor order)
-  [19..33] motor currents in mA
-  [34..35] odometry x, y in metres (from Rust onboard odometry)
+receives 8 B timestamp + 41 × f32 LE per frame (172 B total):
+  [ts]     f64     timestamp_s (monotonic, shared with JPEG stream)
+  [0..3]   f32[4]  IMU quaternion [w, x, y, z]
+  [4..18]  f32[15] joint positions (runtime motor order)
+  [19..33] f32[15] motor currents in mA
+  [34..35] f32[2]  odometry x, y (m)
+  [36..38] f32[3]  ball world x, y, z (m), NaN if stale
+  [39]     f32     odometry z (m)
+  [40]     f32     odometry yaw (rad)
 
 Usage:
     uv run viewer.py --host 192.168.x.x --port 9870
@@ -24,8 +28,8 @@ import mujoco.viewer
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-PACKET_FLOATS = 39          # 4 quat + 15 joints + 15 currents + 2 odometry + 3 ball world pos
-PACKET_BYTES  = PACKET_FLOATS * 4
+PACKET_FLOATS = 41
+PACKET_BYTES  = 8 + PACKET_FLOATS * 4
 
 
 # Motor index → MuJoCo joint name (runtime motor order)
@@ -229,12 +233,14 @@ def main():
                 sock = connect(args.host, args.port)
                 continue
 
-            floats = struct.unpack_from(f"<{PACKET_FLOATS}f", raw)
+            # Skip 8-byte f64 timestamp header, then unpack floats.
+            floats = struct.unpack_from(f"<{PACKET_FLOATS}f", raw, 8)
             qw, qx, qy, qz = floats[0], floats[1], floats[2], floats[3]
             joints = floats[4:19]
             odo_x  = floats[34]
             odo_y  = floats[35]
             ball_x, ball_y, ball_z = floats[36], floats[37], floats[38]
+            # odo_z, odo_yaw = floats[39], floats[40]  # available but unused here
             ball_valid = not (math.isnan(ball_x) or math.isnan(ball_y) or math.isnan(ball_z))
 
             # Set joint angles
