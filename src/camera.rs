@@ -91,7 +91,9 @@ impl CameraStream {
     ///
     /// * `ball_detect` — when `true`, pass `--post-process-file` to rpicam-vid
     ///   so the IMX500 runs onboard inference; parse detection lines from stderr.
-    pub fn start(width: u32, height: u32, fps: u32, ball_detect: bool) -> Self {
+    pub fn start(width: u32, height: u32, fps: u32,
+                 shutter_us: u32,
+                 ball_detect: bool) -> Self {
         let latest_frame: FrameBuffer          = Arc::new(Mutex::new(None));
         let latest_detections: DetectionBuffer = Arc::new(Mutex::new(None));
 
@@ -101,7 +103,7 @@ impl CameraStream {
         thread::spawn(move || {
             loop {
                 if let Err(e) = capture_loop(
-                    width, height, fps, ball_detect,
+                    width, height, fps, shutter_us, ball_detect,
                     Arc::clone(&frame_buf),
                     Arc::clone(&det_buf),
                 ) {
@@ -120,6 +122,7 @@ impl CameraStream {
 
 fn capture_loop(
     width: u32, height: u32, fps: u32,
+    shutter_us: u32,
     ball_detect: bool,
     buf: FrameBuffer,
     det: DetectionBuffer,
@@ -142,6 +145,16 @@ fn capture_loop(
     cmd.args(["--codec", "mjpeg", "--output", "-",
               "--width", &w, "--height", &h, "--framerate", &f,
               "--nopreview", "--timeout", "0"]);
+
+    // Manual shutter: disables AGC and caps exposure. Gain compensates so
+    // frames stay reasonably bright — but very low shutter needs good light.
+    let shutter_str;
+    if shutter_us > 0 {
+        shutter_str = shutter_us.to_string();
+        cmd.args(["--shutter", &shutter_str, "--gain", "4.0",
+                  "--awb", "auto"]);
+        eprintln!("[camera] manual shutter: {} µs (gain 4.0)", shutter_us);
+    }
 
     if ball_detect {
         // Write the IMX500 post-process config to a temp file (once per restart)

@@ -340,6 +340,13 @@ struct Args {
     #[arg(long, default_value_t = 5u32)]
     cam_fps: u32,
 
+    /// Manual shutter time in microseconds (passed to rpicam-vid --shutter).
+    /// 0 = use auto-exposure (default). For SLAM on a walking biped, try
+    /// 2000–5000 µs to kill motion blur — you'll need a well-lit room
+    /// because lowering shutter also lowers brightness.
+    #[arg(long, default_value_t = 0u32)]
+    cam_shutter_us: u32,
+
     /// Enable IMX500 onboard object detection (requires --stream).
     /// Passes --post-process-file to rpicam-vid to run the SSD MobileNetV2
     /// COCO model on-sensor; streams bounding-box JSON to --ball-detect-port.
@@ -909,6 +916,7 @@ impl Runtime {
                 }
                 Some(camera::CameraStream::start(
                     args.cam_width, args.cam_height, args.cam_fps,
+                    args.cam_shutter_us,
                     need_detect,
                 ))
             } else {
