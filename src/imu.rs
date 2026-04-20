@@ -710,6 +710,12 @@ impl Bno08xController {
         self.gravity_offset
     }
 
+    /// Not supported: the BNO08X poll thread only enables rotation-vector + gyro reports.
+    /// Returning an error keeps the trait surface uniform across IMU backends.
+    pub fn read_raw_accelerometer(&mut self) -> Result<[f64; 3]> {
+        Err(anyhow::anyhow!("Raw accelerometer not exposed by Bno08xController"))
+    }
+
     /// Returns the latest sensor data. Never blocks on I2C — the background thread
     /// handles all communication.
     pub fn read(&mut self) -> Result<ImuData> {
@@ -803,6 +809,13 @@ impl Bmi088Controller {
         self.gravity_offset
     }
 
+    /// Read raw accelerometer in m/s² (after the configured axis remap).
+    pub fn read_raw_accelerometer(&mut self) -> Result<[f64; 3]> {
+        let (ax, ay, az) = self.ahrs.imu().read_accelerometer_ms2()
+            .map_err(|e| anyhow::anyhow!("Failed to read BMI088 accelerometer: {:?}", e))?;
+        Ok([ax as f64, ay as f64, az as f64])
+    }
+
     pub fn read(&mut self) -> Result<ImuData> {
         let now = std::time::Instant::now();
         let dt = now.duration_since(self.last_read).as_secs_f32().clamp(0.001, 0.5);
@@ -879,6 +892,16 @@ impl AnyImuController {
             AnyImuController::Bno055(c) => c.get_gravity_offset(),
             AnyImuController::Bno08x(c) => c.get_gravity_offset(),
             AnyImuController::Bmi088(c) => c.get_gravity_offset(),
+        }
+    }
+
+    /// Raw accelerometer in m/s² (body frame, after any axis remap).
+    /// Not all backends expose this — BNO08X currently returns an error.
+    pub fn read_raw_accelerometer(&mut self) -> Result<[f64; 3]> {
+        match self {
+            AnyImuController::Bno055(c) => c.read_raw_accelerometer(),
+            AnyImuController::Bno08x(c) => c.read_raw_accelerometer(),
+            AnyImuController::Bmi088(c) => c.read_raw_accelerometer(),
         }
     }
 }
