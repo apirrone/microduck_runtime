@@ -1,10 +1,20 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use microduck_runtime::imu::{AnyImuController, Bmi088Controller, Bno08xController, ImuController};
 use microduck_runtime::motor::{MotorController, DEFAULT_POSITION};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum TransMode {
+    /// Spring/bounce response — head offset ∝ linear acceleration.
+    /// No integration: no drift, easy to tune, but no long-term position tracking.
+    Accel,
+    /// Leaky double-integration of linear accel to a position estimate.
+    /// Attempts position stabilization; hard to tune, drifts with Madgwick lag + bias.
+    Pos,
+}
 
 #[derive(Parser, Debug)]
 #[command(about = "La poule: chicken-head trick — stabilize head orientation (and optionally position) from body IMU")]
@@ -40,9 +50,14 @@ struct Args {
     settle_secs: f64,
 
     // ─── Translation compensation ─────────────────────────────────────────
-    /// Enable translation compensation via accelerometer double-integration.
+    /// Enable translation compensation.
     #[arg(long)]
     trans: bool,
+
+    /// Translation mode: `accel` (direct spring-like response, recommended) or
+    /// `pos` (leaky double-integration to an estimated position).
+    #[arg(long, value_enum, default_value_t = TransMode::Accel)]
+    trans_mode: TransMode,
 
     /// Gravity magnitude used to subtract expected gravity from raw accel (m/s²).
     #[arg(long, default_value_t = 9.81)]
@@ -52,16 +67,17 @@ struct Args {
     #[arg(long, default_value_t = 1.5)]
     bias_secs: f64,
 
-    /// Leaky-integrator decay time constants (seconds). Smaller = faster decay
-    /// back to zero = less drift, but also less "real" tracking of slow motion.
+    /// `pos` mode only: leaky-integrator decay time constants (seconds).
+    /// Smaller = less drift, less signal. Bigger = more signal, more drift.
     #[arg(long, default_value_t = 0.4)]
     vel_tau: f64,
     #[arg(long, default_value_t = 0.4)]
     pos_tau: f64,
 
-    /// Joint response per metre of estimated body translation (rad/m).
-    /// Split per axis (body frame) and per joint. Defaults are 0 so you can
-    /// enable translation mode without any motion until you tune these in.
+    /// Joint response per unit of the translation signal.
+    /// `accel` mode: rad per (m/s²). Try values in 0.01 .. 0.3.
+    /// `pos`   mode: rad per m.      Try values in 10   .. 200.
+    /// Split per body-frame axis (X=forward, Z=up) and per joint.
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     trans_gain_neck_x: f64,
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
@@ -71,7 +87,12 @@ struct Args {
     #[arg(long, default_value_t = 0.0, allow_hyphen_values = true)]
     trans_gain_head_z: f64,
 
-    /// Clamp on the translation-compensation contribution (rad, each axis).
+    /// Low-pass smoothing on the translation signal (0..1, higher = more responsive).
+    /// Mostly useful in `accel` mode to cut sensor noise.
+    #[arg(long, default_value_t = 0.3)]
+    trans_alpha: f64,
+
+    /// Clamp on the translation-compensation contribution (rad, each joint).
     #[arg(long, default_value_t = 0.4)]
     trans_clamp: f64,
 }
@@ -241,9 +262,18 @@ fn main() -> Result<()> {
     let mut smoothed_rot = [0.0f64; 3]; // [roll, pitch, yaw] compensation
     let mut vel_world = [0.0f64; 3];
     let mut pos_world = [0.0f64; 3];
+    let mut signal_body = [0.0f64; 3]; // smoothed body-frame translation signal (accel or pos)
     let mut last_tick = Instant::now();
     let mut last_print = Instant::now();
 
+    let trans_label = if trans_enabled {
+        match args.trans_mode {
+            TransMode::Accel => "on (accel)",
+            TransMode::Pos => "on (pos)",
+        }
+    } else {
+        "off"
+    };
     println!(
         "Running @ {} Hz — rotation {} — translation {}. Ctrl+C to stop.",
         hz,
@@ -252,7 +282,7 @@ fn main() -> Result<()> {
         } else {
             "on"
         },
-        if trans_enabled { "on" } else { "off" }
+        trans_label
     );
 
     while running.load(Ordering::SeqCst) {
@@ -283,7 +313,7 @@ fn main() -> Result<()> {
                 let mut head_pitch_trans = 0.0f64;
                 if trans_enabled {
                     if let Ok(raw) = imu.read_raw_accelerometer() {
-                        // Remove gravity component and static bias.
+                        // Remove gravity component and static bias (common to both modes).
                         let expected_g =
                             quat_rotate_inverse(d.quat, [0.0, 0.0, args.gravity]);
                         let lin_body = [
@@ -291,27 +321,39 @@ fn main() -> Result<()> {
                             raw[1] - expected_g[1] - accel_bias[1],
                             raw[2] - expected_g[2] - accel_bias[2],
                         ];
-                        // Integrate in world frame so that later decay doesn't
-                        // wash out signal whenever the body rotates.
-                        let lin_world = quat_rotate(d.quat, lin_body);
 
-                        // Leaky integrators: state += input·dt − state·dt/τ.
-                        // τ→∞ is a pure integrator; small τ snaps back to zero.
+                        // Produce a body-frame translation signal per mode.
+                        let raw_signal_body = match args.trans_mode {
+                            TransMode::Accel => {
+                                // No integration — use linear accel directly.
+                                // Spring-like response, no drift, one gain per axis.
+                                lin_body
+                            }
+                            TransMode::Pos => {
+                                // Integrate in world frame so the leak doesn't wash
+                                // out signal whenever the body is rotating.
+                                let lin_world = quat_rotate(d.quat, lin_body);
+                                for i in 0..3 {
+                                    vel_world[i] += lin_world[i] * dt
+                                        - vel_world[i] * dt / args.vel_tau.max(1e-3);
+                                    pos_world[i] += vel_world[i] * dt
+                                        - pos_world[i] * dt / args.pos_tau.max(1e-3);
+                                }
+                                quat_rotate_inverse(d.quat, pos_world)
+                            }
+                        };
+
+                        // First-order smoothing on the translation signal.
                         for i in 0..3 {
-                            vel_world[i] += lin_world[i] * dt
-                                - vel_world[i] * dt / args.vel_tau.max(1e-3);
-                            pos_world[i] += vel_world[i] * dt
-                                - pos_world[i] * dt / args.pos_tau.max(1e-3);
+                            signal_body[i] += args.trans_alpha
+                                * (raw_signal_body[i] - signal_body[i]);
                         }
 
-                        // Bring position back into body frame for joint mapping.
-                        let pos_body = quat_rotate_inverse(d.quat, pos_world);
-
                         // Linear mix onto the two pitch-axis joints.
-                        let raw_neck = args.trans_gain_neck_x * pos_body[0]
-                            + args.trans_gain_neck_z * pos_body[2];
-                        let raw_head = args.trans_gain_head_x * pos_body[0]
-                            + args.trans_gain_head_z * pos_body[2];
+                        let raw_neck = args.trans_gain_neck_x * signal_body[0]
+                            + args.trans_gain_neck_z * signal_body[2];
+                        let raw_head = args.trans_gain_head_x * signal_body[0]
+                            + args.trans_gain_head_z * signal_body[2];
                         neck_pitch_trans =
                             raw_neck.clamp(-args.trans_clamp, args.trans_clamp);
                         head_pitch_trans =
@@ -333,11 +375,17 @@ fn main() -> Result<()> {
                 if last_print.elapsed() >= Duration::from_millis(250) {
                     last_print = Instant::now();
                     if trans_enabled {
+                        let (label, unit) = match args.trans_mode {
+                            TransMode::Accel => ("accel_b", "m/s²"),
+                            TransMode::Pos => ("pos_b", "m"),
+                        };
                         println!(
-                            "rpy[{:+.2} {:+.2} {:+.2}]  rot[p={:+.2} y={:+.2} r={:+.2}]  pos_w[{:+.3} {:+.3} {:+.3}]m  trans[n={:+.2} h={:+.2}]",
+                            "rpy[{:+.2} {:+.2} {:+.2}]  rot[p={:+.2} y={:+.2} r={:+.2}]  {}[{:+.3} {:+.3} {:+.3}]{}  trans[n={:+.2} h={:+.2}]",
                             body_roll, body_pitch, body_yaw,
                             head_pitch_rot, head_yaw_rot, head_roll_rot,
-                            pos_world[0], pos_world[1], pos_world[2],
+                            label,
+                            signal_body[0], signal_body[1], signal_body[2],
+                            unit,
                             neck_pitch_trans, head_pitch_trans
                         );
                     } else {
