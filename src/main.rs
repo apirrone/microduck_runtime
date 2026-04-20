@@ -341,16 +341,17 @@ struct Args {
     cam_fps: u32,
 
     /// Manual shutter time in microseconds (passed to rpicam-vid --shutter).
-    /// 0 = use auto-exposure (default). For SLAM on a walking biped, try
-    /// 2000–5000 µs to kill motion blur — you'll need a well-lit room
-    /// because lowering shutter also lowers brightness.
-    #[arg(long, default_value_t = 0u32)]
+    /// 0 = use rpicam-vid auto-exposure. Default 5000 µs keeps motion blur
+    /// manageable on a walking biped; paired with --cam-gain to compensate
+    /// for reduced exposure time.
+    #[arg(long, default_value_t = 5000u32)]
     cam_shutter_us: u32,
 
     /// Analog gain to pair with --cam-shutter-us (rpicam-vid --gain).
-    /// Ignored unless --cam-shutter-us > 0. Default 4.0 is a mild lift;
-    /// try 6–10 for dim indoor rooms (trades noise for brightness).
-    #[arg(long, default_value_t = 4.0f32)]
+    /// Ignored unless --cam-shutter-us > 0. Default 8.0 pairs with the
+    /// 5000 µs shutter for typical indoor lighting; push higher for dim
+    /// rooms (at the cost of noise).
+    #[arg(long, default_value_t = 8.0f32)]
     cam_gain: f32,
 
     /// Enable IMX500 onboard object detection (requires --stream).
