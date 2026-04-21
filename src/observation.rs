@@ -1,8 +1,77 @@
 use crate::imu::ImuData;
 use crate::motor::{MotorState, NUM_MOTORS, MOUTH_MOTOR_IDX, WHEEL_MOTOR_INDICES};
 
+/// Convert a (w,x,y,z) quaternion to a 3x3 rotation matrix (row-major).
+#[inline]
+fn quat_to_rotmat(q: [f32; 4]) -> [[f32; 3]; 3] {
+    let (w, x, y, z) = (q[0], q[1], q[2], q[3]);
+    let xx = x*x; let yy = y*y; let zz = z*z;
+    let xy = x*y; let xz = x*z; let yz = y*z;
+    let wx = w*x; let wy = w*y; let wz = w*z;
+    [
+        [1.0 - 2.0*(yy+zz), 2.0*(xy - wz),       2.0*(xz + wy)],
+        [2.0*(xy + wz),     1.0 - 2.0*(xx+zz),   2.0*(yz - wx)],
+        [2.0*(xz - wy),     2.0*(yz + wx),       1.0 - 2.0*(xx+yy)],
+    ]
+}
+
+#[inline]
+fn quat_conj(q: [f32; 4]) -> [f32; 4] { [q[0], -q[1], -q[2], -q[3]] }
+
+#[inline]
+fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [
+        a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+        a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+        a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+        a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0],
+    ]
+}
+
+/// Compute (motion_anchor_pos_b, motion_anchor_ori_b) for the tracking observation.
+///
+/// Inputs are in the world frame:
+///   `q_imu`               : robot trunk quaternion (w,x,y,z) from IMU
+///   `ref_trunk_quat_now`  : reference trunk quaternion at current step
+///   `ref_trunk_pos_now`   : reference trunk world position at current step
+///   `ref_trunk_pos_t0`    : reference trunk world position at step 0 (captured on first tick)
+///
+/// Faking assumption: robot's world trunk position = ref_trunk_pos_t0 (i.e. robot starts where the
+/// reference starts and we don't track its world translation). Orientation is real (from IMU).
+/// This means motion_anchor_pos_b encodes "how far the reference has traveled from the start,
+/// rotated into the robot's current body frame" — which is the forward-displacement signal the
+/// policy needs. Training noise on these terms is ±0.25m / ±0.05 so the approximation is within
+/// noise bounds for the 1.7s roulade duration.
+pub fn compute_tracking_anchor_obs(
+    q_imu: [f32; 4],
+    ref_trunk_quat_now: [f32; 4],
+    ref_trunk_pos_now: [f32; 3],
+    ref_trunk_pos_t0: [f32; 3],
+) -> ([f32; 3], [f32; 6]) {
+    // World displacement of reference from start
+    let dx = ref_trunk_pos_now[0] - ref_trunk_pos_t0[0];
+    let dy = ref_trunk_pos_now[1] - ref_trunk_pos_t0[1];
+    let dz = ref_trunk_pos_now[2] - ref_trunk_pos_t0[2];
+
+    // Rotate into robot body frame: pos_b = R_imu^T @ [dx, dy, dz]
+    let r = quat_to_rotmat(q_imu);
+    let pos_b = [
+        r[0][0]*dx + r[1][0]*dy + r[2][0]*dz,
+        r[0][1]*dx + r[1][1]*dy + r[2][1]*dz,
+        r[0][2]*dx + r[1][2]*dy + r[2][2]*dz,
+    ];
+
+    // ori_b = R_imu^T @ R_ref, keep first 2 columns, flattened row-major (matches mjlab):
+    // [m00, m01, m10, m11, m20, m21]
+    let q_rel = quat_mul(quat_conj(q_imu), ref_trunk_quat_now);
+    let m = quat_to_rotmat(q_rel);
+    let ori_b = [m[0][0], m[0][1], m[1][0], m[1][1], m[2][0], m[2][1]];
+
+    (pos_b, ori_b)
+}
+
 /// Maximum observation size (with phase)
-pub const MAX_OBSERVATION_SIZE: usize = 60;
+pub const MAX_OBSERVATION_SIZE: usize = 100;
 
 /// Observation vector structure
 ///
@@ -212,6 +281,73 @@ impl Observation {
     /// Get mutable access to the observation data
     pub fn as_mut_slice(&mut self) -> &mut [f32] {
         &mut self.data[..self.size]
+    }
+
+    /// Build the 85D tracking observation matching mjlab.tasks.tracking policy inputs.
+    ///
+    /// Layout (order must match mjlab/tasks/tracking/tracking_env_cfg.py policy_terms):
+    ///   command (28)              : ref_joint_pos (14) || ref_joint_vel (14)
+    ///   motion_anchor_pos_b (3)   : reference trunk pos in robot's trunk frame
+    ///   motion_anchor_ori_b (6)   : first 2 cols of (R_imu^T · R_ref)
+    ///   base_lin_vel (3)          : IMU lin vel (body frame) — we pass [0,0,0] since we lack it
+    ///   base_ang_vel (3)          : gyro
+    ///   joint_pos (14)            : motor_state.positions - default (mouth excluded)
+    ///   joint_vel (14)            : motor_state.velocities (mouth excluded)
+    ///   actions (14)              : last_action (mouth excluded)
+    ///
+    /// `ref_joint_pos` / `ref_joint_vel` must be in mjlab hinge-joint order (14 slots).
+    /// The caller is responsible for remapping to/from runtime motor order.
+    pub fn new_tracking(
+        imu: &ImuData,
+        motor_state: &MotorState,
+        last_action: &[f32; NUM_MOTORS],
+        default_positions: &[f64; NUM_MOTORS],
+        ref_joint_pos: &[f32; 14],
+        ref_joint_vel: &[f32; 14],
+        motion_anchor_pos_b: &[f32; 3],
+        motion_anchor_ori_b: &[f32; 6],
+    ) -> Self {
+        let mut data = [0.0f32; MAX_OBSERVATION_SIZE];
+        let mut idx = 0;
+
+        // command: ref_joint_pos (14) then ref_joint_vel (14)
+        for v in ref_joint_pos { data[idx] = *v; idx += 1; }
+        for v in ref_joint_vel { data[idx] = *v; idx += 1; }
+
+        // motion_anchor_pos_b (3)
+        for v in motion_anchor_pos_b { data[idx] = *v; idx += 1; }
+        // motion_anchor_ori_b (6)
+        for v in motion_anchor_ori_b { data[idx] = *v; idx += 1; }
+
+        // base_lin_vel (3) — not available on hardware; we pass zeros.
+        // Training adds Unoise(-0.5, 0.5) so the policy should tolerate this.
+        for _ in 0..3 { data[idx] = 0.0; idx += 1; }
+
+        // base_ang_vel (3): gyro
+        for i in 0..3 { data[idx] = imu.gyro[i] as f32; idx += 1; }
+
+        // joint_pos (14): relative to default, mouth excluded
+        for i in 0..NUM_MOTORS {
+            if i == MOUTH_MOTOR_IDX { continue; }
+            data[idx] = (motor_state.positions[i] - default_positions[i]) as f32;
+            idx += 1;
+        }
+        // joint_vel (14): mouth excluded
+        for i in 0..NUM_MOTORS {
+            if i == MOUTH_MOTOR_IDX { continue; }
+            data[idx] = motor_state.velocities[i] as f32;
+            idx += 1;
+        }
+        // actions (14): last action, mouth excluded
+        for i in 0..NUM_MOTORS {
+            if i == MOUTH_MOTOR_IDX { continue; }
+            data[idx] = last_action[i];
+            idx += 1;
+        }
+
+        let size = idx;
+        assert!(size == 85, "Tracking observation size must be 85, got {}", size);
+        Self { data, size }
     }
 }
 

@@ -13,6 +13,26 @@ pub enum PolicyMode {
     Onnx(Session),
 }
 
+/// Cached reference tensors returned by the tracking ONNX for the current time_step.
+/// The policy runs the ONNX once, caches the refs, then the next observation is built
+/// from them. Field sizes match the motion baked into the model:
+/// - joint_pos / joint_vel : 14 (hinge joints)
+/// - body_pos_w / body_quat_w : [NB, 3] / [NB, 4] (world-frame body pose, NB = len(body_names))
+/// - body_lin_vel_w / body_ang_vel_w : [NB, 3]
+#[derive(Default, Clone)]
+pub struct RoulaideRefs {
+    pub joint_pos: [f32; 14],
+    pub joint_vel: [f32; 14],
+    /// [nbody, 3] flattened. Size set from first ONNX call.
+    pub body_pos_w: Vec<f32>,
+    pub body_quat_w: Vec<f32>,
+    pub body_lin_vel_w: Vec<f32>,
+    pub body_ang_vel_w: Vec<f32>,
+    pub num_bodies: usize,
+    /// Whether the refs have been populated at least once (by running ONNX at t=0).
+    pub initialized: bool,
+}
+
 /// Policy inference engine using ONNX Runtime
 pub struct Policy {
     mode: PolicyMode,
@@ -21,6 +41,9 @@ pub struct Policy {
     ground_pick_active: bool,
     jump_mode: Option<PolicyMode>,
     jump_active: bool,
+    roulade_session: Option<Session>,
+    roulade_active: bool,
+    roulade_refs: RoulaideRefs,
     fold_mode: Option<PolicyMode>,
     start_time: Instant,
     command_threshold: f64,
@@ -37,6 +60,9 @@ impl Policy {
             ground_pick_active: false,
             jump_mode: None,
             jump_active: false,
+            roulade_session: None,
+            roulade_active: false,
+            roulade_refs: RoulaideRefs::default(),
             fold_mode: None,
             start_time: Instant::now(),
             command_threshold: 0.05,
@@ -61,6 +87,9 @@ impl Policy {
             ground_pick_active: false,
             jump_mode: None,
             jump_active: false,
+            roulade_session: None,
+            roulade_active: false,
+            roulade_refs: RoulaideRefs::default(),
             fold_mode: None,
             start_time: Instant::now(),
             command_threshold: 0.05,
@@ -116,6 +145,106 @@ impl Policy {
     /// Whether a jump policy is loaded
     pub fn has_jump(&self) -> bool {
         self.jump_mode.is_some()
+    }
+
+    /// Load a roulade (motion-tracking) policy from an ONNX model file.
+    ///
+    /// The model is expected to have two inputs `obs` [1,85] (f32) and `time_step` [1,1] (f32),
+    /// and seven outputs: actions [1,14], joint_pos [1,14], joint_vel [1,14],
+    /// body_pos_w [1,NB,3], body_quat_w [1,NB,4], body_lin_vel_w [1,NB,3], body_ang_vel_w [1,NB,3].
+    /// The motion data is baked inside the ONNX (see mjlab tracking exporter).
+    pub fn add_roulade(&mut self, path: &str) -> Result<()> {
+        let session = Session::builder()?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(2)?
+            .commit_from_file(path)?;
+        self.roulade_session = Some(session);
+        self.roulade_refs = RoulaideRefs::default();
+        Ok(())
+    }
+
+    pub fn has_roulade(&self) -> bool { self.roulade_session.is_some() }
+
+    pub fn set_roulade_active(&mut self, active: bool) {
+        self.roulade_active = active;
+        if active {
+            // Reset cached refs so the first step uses zeros until we've run ONNX once.
+            self.roulade_refs.initialized = false;
+        }
+    }
+
+    pub fn roulade_refs(&self) -> &RoulaideRefs { &self.roulade_refs }
+
+    /// Run the tracking ONNX for one step.
+    ///
+    /// `observation` must be the 85D tracking obs (see `Observation::new_tracking`).
+    /// `time_step` is the integer frame index into the motion (clamped by the ONNX at max-1).
+    /// Returns the 14 action offsets and updates `self.roulade_refs` so the caller can
+    /// build the next observation.
+    pub fn infer_roulade(
+        &mut self,
+        observation: &Observation,
+        time_step: i64,
+    ) -> Result<[f32; NUM_MOTORS]> {
+        let session = self.roulade_session.as_mut()
+            .ok_or_else(|| anyhow::anyhow!("roulade policy not loaded"))?;
+
+        let obs_vec = observation.as_slice().to_vec();
+        let obs_size = obs_vec.len();
+        let obs_value = Value::from_array(([1usize, obs_size], obs_vec))
+            .map_err(|e| anyhow::anyhow!("Failed to create obs value: {}", e))?;
+        let ts_value = Value::from_array(([1usize, 1usize], vec![time_step as f32]))
+            .map_err(|e| anyhow::anyhow!("Failed to create time_step value: {}", e))?;
+
+        let outputs = session
+            .run(ort::inputs!["obs" => &obs_value, "time_step" => &ts_value])
+            .map_err(|e| anyhow::anyhow!("Roulade ONNX inference failed: {}", e))?;
+
+        // Outputs are keyed by name (see exporter.py output_names). Extract by name.
+        let get = |name: &str| -> Result<(Vec<i64>, Vec<f32>)> {
+            let v = outputs.get(name)
+                .ok_or_else(|| anyhow::anyhow!("roulade ONNX missing output '{}'", name))?;
+            let (shape, data) = v.try_extract_tensor::<f32>()
+                .map_err(|e| anyhow::anyhow!("Failed to extract '{}': {}", name, e))?;
+            Ok((shape.as_ref().to_vec(), data.to_vec()))
+        };
+
+        let (actions_shape, actions_data) = get("actions")?;
+        if actions_shape.len() != 2 || actions_shape[1] != 14 {
+            return Err(anyhow::anyhow!(
+                "Roulade actions shape {:?} != [1,14]", actions_shape));
+        }
+
+        let (_, jp) = get("joint_pos")?;
+        let (_, jv) = get("joint_vel")?;
+        let (bp_shape, bp) = get("body_pos_w")?;
+        let (_, bq) = get("body_quat_w")?;
+        let (_, blv) = get("body_lin_vel_w")?;
+        let (_, bav) = get("body_ang_vel_w")?;
+
+        // Determine number of bodies from body_pos_w shape [1, NB, 3]
+        let num_bodies = if bp_shape.len() == 3 { bp_shape[1] as usize } else { bp.len() / 3 };
+
+        // Cache refs. joint_pos/vel are [1,14] → copy to fixed arrays.
+        for i in 0..14 {
+            self.roulade_refs.joint_pos[i] = jp[i];
+            self.roulade_refs.joint_vel[i] = jv[i];
+        }
+        self.roulade_refs.body_pos_w = bp;
+        self.roulade_refs.body_quat_w = bq;
+        self.roulade_refs.body_lin_vel_w = blv;
+        self.roulade_refs.body_ang_vel_w = bav;
+        self.roulade_refs.num_bodies = num_bodies;
+        self.roulade_refs.initialized = true;
+
+        // Map 14 outputs → 15-slot action array (mouth stays at 0 — roulade is legacy 14-DOF).
+        let mut actions = [0.0f32; NUM_MOTORS];
+        let mut out_idx = 0;
+        for i in 0..NUM_MOTORS {
+            if i == MOUTH_MOTOR_IDX { actions[i] = 0.0; }
+            else { actions[i] = actions_data[out_idx]; out_idx += 1; }
+        }
+        Ok(actions)
     }
 
     /// Load a fold policy from an ONNX model file

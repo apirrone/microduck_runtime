@@ -280,6 +280,24 @@ struct Args {
     #[arg(long, default_value_t = 1.0)]
     jump_kp_ratio: f64,
 
+    /// Path to roulade (motion-tracking) policy ONNX model file (enables X button one-shot roulade).
+    /// Takes priority over --jump if both are provided.
+    #[arg(long)]
+    roulade: Option<String>,
+
+    /// Duration of the roulade motion in seconds (matches the training motion length, default 1.72s).
+    #[arg(long, default_value_t = 1.72)]
+    roulade_duration: f64,
+
+    /// Action scale to use during roulade (overrides --action-scale for the duration).
+    /// The tracking env trains with scale=1.0 and use_default_offset=True.
+    #[arg(long, default_value_t = 1.0)]
+    roulade_action_scale: f64,
+
+    /// kP multiplier applied to all motors during roulade.
+    #[arg(long, default_value_t = 1.0)]
+    roulade_kp_ratio: f64,
+
     /// kP multiplier applied to all motors when using the standing policy (e.g. 0.6 = 40% reduction)
     #[arg(long, default_value_t = 0.6)]
     standing_kp_ratio: f64,
@@ -461,6 +479,15 @@ struct Runtime {
     jump_action_scale: f64,
     jump_kp_ratio: f64,
     x_button_prev_state: bool,
+    // Roulade (motion-tracking, takes priority over jump when loaded)
+    roulade_active: bool,
+    roulade_step: i64,
+    roulade_steps_total: i64,
+    roulade_action_scale: f64,
+    roulade_kp_ratio: f64,
+    /// Reference trunk position at step 0 (world frame), captured on first ONNX call.
+    /// Used to compute motion_anchor_pos_b as a world displacement rotated into robot body frame.
+    roulade_ref_trunk_pos_t0: Option<[f32; 3]>,
     // Current estimation (running stats, updated every control step)
     estimate_current: bool,
     current_sum: f64,
@@ -646,6 +673,20 @@ impl Runtime {
             }
         }
 
+        // Load roulade (motion-tracking) model if specified (takes X-button priority over jump).
+        if let Some(ref roulade_path) = args.roulade {
+            println!("✓ Loading roulade (tracking) ONNX model from: {}", roulade_path);
+            match policy.add_roulade(roulade_path) {
+                Ok(()) => println!(
+                    "  Roulade duration: {:.2}s ({} steps @ {} Hz) — X button triggers",
+                    args.roulade_duration,
+                    (args.roulade_duration * args.freq as f64).round() as i64,
+                    args.freq
+                ),
+                Err(e) => eprintln!("⚠  Failed to load roulade policy (X button falls back to jump): {}", e),
+            }
+        }
+
         if args.pitch_offset != 0.0 {
             println!("⚠  Using pitch offset: {:.4} rad ({:.2}°)", args.pitch_offset, args.pitch_offset.to_degrees());
         }
@@ -814,6 +855,12 @@ impl Runtime {
             jump_action_scale: args.jump_action_scale,
             jump_kp_ratio: args.jump_kp_ratio,
             x_button_prev_state: false,
+            roulade_active: false,
+            roulade_step: 0,
+            roulade_steps_total: (args.roulade_duration * args.freq as f64).round() as i64,
+            roulade_action_scale: args.roulade_action_scale,
+            roulade_kp_ratio: args.roulade_kp_ratio,
+            roulade_ref_trunk_pos_t0: None,
             estimate_current: args.estimate_current,
             current_sum: 0.0,
             current_count: 0,
@@ -1079,9 +1126,23 @@ impl Runtime {
             }
             self.b_button_prev_state = b_pressed;
 
-            // Handle X button (North) to trigger one jump cycle (auto-exits on completion)
+            // Handle X button (North): roulade takes priority over jump when both loaded.
             let x_pressed = self.controller.is_button_pressed("North");
-            if x_pressed && !self.x_button_prev_state && self.policy.has_jump() && !self.jump_active && !self.ground_pick_active {
+            let x_edge = x_pressed && !self.x_button_prev_state && !self.ground_pick_active;
+            if x_edge && self.policy.has_roulade() && !self.roulade_active && !self.jump_active {
+                self.roulade_active = true;
+                self.roulade_step = 0;
+                self.roulade_ref_trunk_pos_t0 = None;
+                self.policy.set_roulade_active(true);
+                self.prev_action_scale = self.action_scale;
+                self.action_scale = self.roulade_action_scale;
+                let (kp, ki, kd) = self.pid_gains;
+                let roulade_kp = (kp as f64 * self.roulade_kp_ratio).round() as u16;
+                self.motor_controller.set_pid_gains(roulade_kp, ki, kd)
+                    .context("Failed to set roulade PID gains")?;
+                println!("◎ Roulade: started ({} steps, action_scale={:.2}, kP={} → {})",
+                    self.roulade_steps_total, self.action_scale, kp, roulade_kp);
+            } else if x_edge && !self.policy.has_roulade() && self.policy.has_jump() && !self.jump_active {
                 self.jump_active = true;
                 self.jump_phase = 0.0;
                 self.policy.set_jump_active(true);
@@ -1604,7 +1665,7 @@ impl Runtime {
         };
 
         // Standing policy transitions: apply action_scale=1 and kp=60% when switching to standing
-        if !self.ground_pick_active && !self.jump_active && !self.roller_mode && !self.motorized_wheel_mode {
+        if !self.ground_pick_active && !self.jump_active && !self.roulade_active && !self.roller_mode && !self.motorized_wheel_mode {
             let will_stand = self.policy.will_use_standing(effective_command);
             if will_stand && !self.is_using_standing {
                 self.is_using_standing = true;
@@ -1668,6 +1729,62 @@ impl Runtime {
                 self.ball_kick_policy.as_mut().unwrap()
                     .infer(&kick_obs, &[0.0; 3], false)
                     .context("Failed to run kick-ball policy inference")?
+            } else {
+                [0.0f32; NUM_MOTORS]
+            }
+        } else if self.roulade_active {
+            // ── Roulade (motion-tracking) policy ──────────────────────────────
+            // Two-pass per tick: (1) query refs at current step with a dummy obs, then
+            // (2) build the real 85D obs from those refs and run inference for the action.
+            if self.policy_enabled {
+                let t = self.roulade_step;
+                // Pass 1: bootstrap refs for current step. Zero-obs action is discarded.
+                let zero_ref = [0.0f32; 14];
+                let zero_pos_b = [0.0f32; 3];
+                let zero_ori_b = [0.0f32; 6];
+                let dummy_obs = Observation::new_tracking(
+                    &imu_data, &motor_state, &self.last_action, &self.default_positions,
+                    &zero_ref, &zero_ref, &zero_pos_b, &zero_ori_b,
+                );
+                let _ = self.policy.infer_roulade(&dummy_obs, t)
+                    .context("Failed to bootstrap roulade refs")?;
+
+                // Capture reference trunk t0 on first tick (trunk is body_names[0]).
+                if self.roulade_ref_trunk_pos_t0.is_none() {
+                    let refs = self.policy.roulade_refs();
+                    if refs.body_pos_w.len() >= 3 {
+                        self.roulade_ref_trunk_pos_t0 = Some([
+                            refs.body_pos_w[0], refs.body_pos_w[1], refs.body_pos_w[2],
+                        ]);
+                    }
+                }
+
+                // Read refs for current step from the cache populated by pass 1.
+                let refs = self.policy.roulade_refs().clone();
+                let t0 = self.roulade_ref_trunk_pos_t0.unwrap_or([0.0; 3]);
+                let trunk_pos_now = if refs.body_pos_w.len() >= 3 {
+                    [refs.body_pos_w[0], refs.body_pos_w[1], refs.body_pos_w[2]]
+                } else { [0.0; 3] };
+                let trunk_quat_now = if refs.body_quat_w.len() >= 4 {
+                    [refs.body_quat_w[0], refs.body_quat_w[1], refs.body_quat_w[2], refs.body_quat_w[3]]
+                } else { [1.0, 0.0, 0.0, 0.0] };
+
+                // IMU quat (w,x,y,z) cast to f32.
+                let q_imu = [
+                    imu_data.quat[0] as f32, imu_data.quat[1] as f32,
+                    imu_data.quat[2] as f32, imu_data.quat[3] as f32,
+                ];
+                let (pos_b, ori_b) = observation::compute_tracking_anchor_obs(
+                    q_imu, trunk_quat_now, trunk_pos_now, t0,
+                );
+
+                let track_obs = Observation::new_tracking(
+                    &imu_data, &motor_state, &self.last_action, &self.default_positions,
+                    &refs.joint_pos, &refs.joint_vel, &pos_b, &ori_b,
+                );
+                // Pass 2: get the action for this step.
+                self.policy.infer_roulade(&track_obs, t)
+                    .context("Failed to run roulade inference")?
             } else {
                 [0.0f32; NUM_MOTORS]
             }
@@ -1843,6 +1960,29 @@ impl Runtime {
                     self.motor_controller.set_pid_gains(kp, ki, kd)
                         .context("Failed to restore PID gains after ground pick")?;
                     println!("▲ Ground pick: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
+                }
+            }
+        }
+
+        // Advance roulade time_step; one-shot, auto-exit when motion ends.
+        if self.roulade_active {
+            self.roulade_step += 1;
+            if self.roulade_step >= self.roulade_steps_total {
+                self.roulade_active = false;
+                self.roulade_step = 0;
+                self.roulade_ref_trunk_pos_t0 = None;
+                self.policy.set_roulade_active(false);
+                self.action_scale = self.prev_action_scale;
+                let (kp, ki, kd) = self.pid_gains;
+                if self.is_using_standing {
+                    let standing_kp = (kp as f64 * self.standing_kp_ratio).round() as u16;
+                    self.motor_controller.set_pid_gains(standing_kp, ki, kd)
+                        .context("Failed to restore standing PID gains after roulade")?;
+                    println!("◉ Roulade: done, returning to standing (action_scale={:.2}, kP={})", self.action_scale, standing_kp);
+                } else {
+                    self.motor_controller.set_pid_gains(kp, ki, kd)
+                        .context("Failed to restore PID gains after roulade")?;
+                    println!("◉ Roulade: done, returning to walking (action_scale={:.2}, kP restored to {})", self.action_scale, kp);
                 }
             }
         }
