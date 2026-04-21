@@ -143,6 +143,15 @@ if [ -d /boot/firmware ] && command -v raspi-config &> /dev/null; then
         rm -f "$TMP_SUDOERS"
     fi
 
+    # --- alsa-utils (aplay) for the quack sound ----------------------------
+    if ! command -v aplay &> /dev/null; then
+        echo "  → Installing alsa-utils (aplay)"
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq alsa-utils
+    else
+        echo -e "  ${GREEN}✓${NC} alsa-utils already installed"
+    fi
+
     # --- Audio: TLV320AIC3104 codec ----------------------------------------
     # Copies the device-tree overlay to /boot/firmware/overlays/, installs the
     # init script to /usr/local/bin/, and enables a oneshot systemd service
@@ -293,6 +302,18 @@ if [ -f "robot.urdf" ]; then
     mkdir -p "$HOME/microduck"
     cp robot.urdf "$HOME/microduck/robot.urdf"
     echo -e "${GREEN}✓ URDF installed to $HOME/microduck/robot.urdf${NC}"
+fi
+
+# Install quack sound (played when mouth opens)
+QUACK_DST="$HOME/microduck/quack.wav"
+mkdir -p "$HOME/microduck"
+if [ -f "assets/quack.wav" ]; then
+    cp assets/quack.wav "$QUACK_DST"
+    echo -e "${GREEN}✓ quack.wav installed to $QUACK_DST${NC}"
+elif curl -sSfL -o "$QUACK_DST" "https://raw.githubusercontent.com/$REPO/main/assets/quack.wav"; then
+    echo -e "${GREEN}✓ quack.wav fetched to $QUACK_DST${NC}"
+else
+    echo -e "${YELLOW}Warning: quack.wav not found in archive and could not be fetched${NC}"
 fi
 
 

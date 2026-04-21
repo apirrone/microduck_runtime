@@ -457,6 +457,7 @@ struct Runtime {
     mouth_enabled: bool,  // Whether mouth is part of the policy (--mouth flag)
     mouth_position: f64,  // Legacy mode: absolute mouth position from trigger (not used in mouth mode)
     mouth_offset: f64,    // Mouth mode: additive offset on top of policy mouth output (right trigger)
+    prev_right_trigger: f32,  // Previous right-trigger value, for rising-edge quack detection
     head_mode: bool,  // Head control mode (Y button)
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
     default_positions: [f64; NUM_MOTORS],  // per-run override of DEFAULT_POSITION
@@ -798,6 +799,7 @@ impl Runtime {
             mouth_enabled: args.mouth,
             mouth_position: MOUTH_MIN_ANGLE,
             mouth_offset: 0.0,
+            prev_right_trigger: 0.0,
             head_mode: false,
             head_offsets: [0.0; 4],
             default_positions: {
@@ -1261,6 +1263,21 @@ impl Runtime {
             } else {
                 self.mouth_position = MOUTH_MIN_ANGLE + state.right_trigger as f64 * mouth_range;
             }
+
+            // Quack on mouth-open rising edge
+            const QUACK_THRESHOLD: f32 = 0.3;
+            if self.prev_right_trigger < QUACK_THRESHOLD && state.right_trigger >= QUACK_THRESHOLD {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/home/microduck".into());
+                let wav = format!("{}/microduck/quack.wav", home);
+                std::process::Command::new("aplay")
+                    .args(["-q", &wav])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .ok();
+            }
+            self.prev_right_trigger = state.right_trigger;
 
             // Handle Start button to toggle policy inference (or recover from fall)
             let start_pressed = self.controller.is_button_pressed("Start");

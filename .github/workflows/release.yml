@@ -92,10 +92,13 @@ jobs:
           cp rpi_setup/microduck_runtime.service dist/
           # Copy URDF for inline odometry (mesh assets not needed for FK)
           cp fk/robot.urdf dist/
+          # Copy audio assets (quack sound played on mouth open)
+          mkdir -p dist/assets
+          cp assets/quack.wav dist/assets/
           # Copy ONNX Runtime library (preserving symlinks)
           cp -a /tmp/onnxruntime-linux-aarch64-1.23.0/lib/libonnxruntime.so* dist/
           cd dist
-          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw calibrate_imu test_controller init em check_voltage microduck_help debug_bno08x wheel_sysid reboot_motors la_poule policies microduck_runtime.service robot.urdf libonnxruntime.so*
+          tar czf microduck_runtime-aarch64-linux.tar.gz microduck_runtime test_imu test_i2c_raw calibrate_imu test_controller init em check_voltage microduck_help debug_bno08x wheel_sysid reboot_motors la_poule policies microduck_runtime.service robot.urdf assets libonnxruntime.so*
           cd ..
 
       - name: Create Release
