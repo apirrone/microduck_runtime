@@ -458,6 +458,7 @@ struct Runtime {
     mouth_position: f64,  // Legacy mode: absolute mouth position from trigger (not used in mouth mode)
     mouth_offset: f64,    // Mouth mode: additive offset on top of policy mouth output (right trigger)
     prev_right_trigger: f32,  // Previous right-trigger value, for rising-edge quack detection
+    quack_child: Option<std::process::Child>,  // Currently-playing quack; killed on retrigger so rapid spams cut off cleanly
     head_mode: bool,  // Head control mode (Y button)
     head_offsets: [f64; 4],  // [neck_pitch, head_pitch, head_yaw, head_roll] added on top of policy outputs
     default_positions: [f64; NUM_MOTORS],  // per-run override of DEFAULT_POSITION
@@ -800,6 +801,7 @@ impl Runtime {
             mouth_position: MOUTH_MIN_ANGLE,
             mouth_offset: 0.0,
             prev_right_trigger: 0.0,
+            quack_child: None,
             head_mode: false,
             head_offsets: [0.0; 4],
             default_positions: {
@@ -1264,12 +1266,21 @@ impl Runtime {
                 self.mouth_position = MOUTH_MIN_ANGLE + state.right_trigger as f64 * mouth_range;
             }
 
-            // Quack on mouth-open rising edge
+            // Quack on mouth-open rising edge. hw:0,0 is exclusive, so we kill
+            // any still-playing aplay before spawning a new one — lets the user
+            // spam quacks by rapidly pulsing the trigger.
             const QUACK_THRESHOLD: f32 = 0.3;
             if self.prev_right_trigger < QUACK_THRESHOLD && state.right_trigger >= QUACK_THRESHOLD {
+                if let Some(mut child) = self.quack_child.take() {
+                    // Only kill if still running; ignore errors (already exited)
+                    if let Ok(None) = child.try_wait() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/home/microduck".into());
                 let wav = format!("{}/microduck/quack.wav", home);
-                std::process::Command::new("aplay")
+                self.quack_child = std::process::Command::new("aplay")
                     .args(["-q", "-D", "hw:0,0", "-r", "44100", &wav])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
