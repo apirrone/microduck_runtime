@@ -15,6 +15,13 @@ ExecStart=/usr/local/bin/microduck_runtime
 Restart=on-failure
 RestartSec=5
 
+# On long-press Select the runtime spawns a detached shell that runs
+# `systemctl stop` + `shutdown 0`. The default KillMode=control-group would
+# terminate that shell along with the runtime, so the shutdown command never
+# executes. KillMode=process only terminates the main process and lets the
+# detached shell survive long enough to signal init.
+KillMode=process
+
 # Allow the process to access input devices (joystick/gamepad)
 SupplementaryGroups=input plugdev
 

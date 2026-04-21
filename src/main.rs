@@ -1270,7 +1270,7 @@ impl Runtime {
                 let home = std::env::var("HOME").unwrap_or_else(|_| "/home/microduck".into());
                 let wav = format!("{}/microduck/quack.wav", home);
                 std::process::Command::new("aplay")
-                    .args(["-q", &wav])
+                    .args(["-q", "-D", "hw:0,0", "-r", "44100", &wav])
                     .stdin(std::process::Stdio::null())
                     .stdout(std::process::Stdio::null())
                     .stderr(std::process::Stdio::null())
