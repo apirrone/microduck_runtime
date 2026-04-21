@@ -1,0 +1,14 @@
+[Unit]
+Description=TLV320AIC3104 codec init (PLL + DAC + line out)
+After=systemd-modules-load.service
+ConditionPathExists=/dev/i2c-1
+# Must run before the runtime starts using audio
+Before=microduck_runtime.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/aic3104-init.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

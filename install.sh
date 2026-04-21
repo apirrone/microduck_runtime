@@ -75,12 +75,22 @@ if [ -d /boot/firmware ] && command -v raspi-config &> /dev/null; then
     rm -f "$REPO_CFG_TMP"
 
     # --- I2C ---------------------------------------------------------------
-    if [ "$(sudo raspi-config nonint get_i2c)" != "0" ]; then
-        echo "  → Enabling I2C"
-        sudo raspi-config nonint do_i2c 0
-        REBOOT_NEEDED=1
-    else
+    # get_i2c only checks the dtparam; we also need i2c-dev in /etc/modules
+    # for userspace access. Check both.
+    I2C_DTPARAM_OK=0
+    I2C_MODULE_OK=0
+    [ "$(sudo raspi-config nonint get_i2c 2>/dev/null)" = "0" ] && I2C_DTPARAM_OK=1
+    grep -Eq '^\s*i2c-dev\s*$' /etc/modules 2>/dev/null && I2C_MODULE_OK=1
+    if [ "$I2C_DTPARAM_OK" = "1" ] && [ "$I2C_MODULE_OK" = "1" ]; then
         echo -e "  ${GREEN}✓${NC} I2C already enabled"
+    else
+        echo "  → Enabling I2C (dtparam + i2c-dev module)"
+        sudo raspi-config nonint do_i2c 0
+        # Belt-and-braces: ensure module line exists even if raspi-config missed it
+        if ! grep -Eq '^\s*i2c-dev\s*$' /etc/modules 2>/dev/null; then
+            echo "i2c-dev" | sudo tee -a /etc/modules >/dev/null
+        fi
+        REBOOT_NEEDED=1
     fi
 
     # --- Serial: console OFF, hardware port ON -----------------------------
@@ -112,6 +122,87 @@ if [ -d /boot/firmware ] && command -v raspi-config &> /dev/null; then
             echo -e "  ${YELLOW}Note: no active wifi connection found, skipping powersave${NC}"
         fi
     fi
+
+    # --- Passwordless sudo for poweroff (used by long-press Select) --------
+    # The runtime runs as user 'microduck' and triggers `sudo shutdown 0` /
+    # `sudo systemctl stop` on long-press. Without this drop-in, sudo prompts
+    # for a password and the command fails silently from the systemd service.
+    SUDOERS_FILE="/etc/sudoers.d/microduck-runtime"
+    SUDOERS_CONTENT="microduck ALL=(ALL) NOPASSWD: /sbin/shutdown, /sbin/poweroff, /sbin/reboot, /bin/systemctl stop microduck_runtime.service, /bin/systemctl poweroff, /bin/systemctl reboot"
+    if [ -f "$SUDOERS_FILE" ] && sudo grep -Fqx "$SUDOERS_CONTENT" "$SUDOERS_FILE" 2>/dev/null; then
+        echo -e "  ${GREEN}✓${NC} Passwordless sudo rule already in place"
+    else
+        echo "  → Installing passwordless sudo rule at $SUDOERS_FILE"
+        TMP_SUDOERS="$(mktemp)"
+        echo "$SUDOERS_CONTENT" > "$TMP_SUDOERS"
+        if sudo visudo -cf "$TMP_SUDOERS" >/dev/null; then
+            sudo install -m 0440 -o root -g root "$TMP_SUDOERS" "$SUDOERS_FILE"
+        else
+            echo -e "  ${RED}visudo validation failed — not installing $SUDOERS_FILE${NC}"
+        fi
+        rm -f "$TMP_SUDOERS"
+    fi
+
+    # --- Audio: TLV320AIC3104 codec ----------------------------------------
+    # Copies the device-tree overlay to /boot/firmware/overlays/, installs the
+    # init script to /usr/local/bin/, and enables a oneshot systemd service
+    # that programs the codec over I2C at every boot (the chip loses state on
+    # power-off).
+    REPO_RAW="https://raw.githubusercontent.com/$REPO/main/rpi_setup"
+
+    # 1) dtbo overlay
+    DTBO_DST="/boot/firmware/overlays/tlv320aic3104.dtbo"
+    DTBO_TMP="$(mktemp)"
+    if curl -sSfL -o "$DTBO_TMP" "$REPO_RAW/tlv320aic3104.dtbo"; then
+        if [ ! -f "$DTBO_DST" ] || ! cmp -s "$DTBO_TMP" "$DTBO_DST"; then
+            echo "  → Installing $DTBO_DST"
+            sudo cp "$DTBO_TMP" "$DTBO_DST"
+            REBOOT_NEEDED=1
+        else
+            echo -e "  ${GREEN}✓${NC} tlv320aic3104.dtbo already up to date"
+        fi
+    else
+        echo -e "  ${YELLOW}Warning: could not fetch tlv320aic3104.dtbo${NC}"
+    fi
+    rm -f "$DTBO_TMP"
+
+    # 2) init script → /usr/local/bin/aic3104-init.sh
+    INIT_DST="/usr/local/bin/aic3104-init.sh"
+    INIT_TMP="$(mktemp)"
+    if curl -sSfL -o "$INIT_TMP" "$REPO_RAW/aic3104-init.sh"; then
+        if [ ! -f "$INIT_DST" ] || ! cmp -s "$INIT_TMP" "$INIT_DST"; then
+            echo "  → Installing $INIT_DST"
+            sudo install -m 0755 "$INIT_TMP" "$INIT_DST"
+        else
+            echo -e "  ${GREEN}✓${NC} aic3104-init.sh already up to date"
+        fi
+    else
+        echo -e "  ${YELLOW}Warning: could not fetch aic3104-init.sh${NC}"
+    fi
+    rm -f "$INIT_TMP"
+
+    # 3) systemd service → /etc/systemd/system/aic3104-init.service
+    AUDIO_SVC="aic3104-init.service"
+    AUDIO_SVC_DST="/etc/systemd/system/$AUDIO_SVC"
+    AUDIO_SVC_TMP="$(mktemp)"
+    if curl -sSfL -o "$AUDIO_SVC_TMP" "$REPO_RAW/$AUDIO_SVC"; then
+        SVC_CHANGED=0
+        if [ ! -f "$AUDIO_SVC_DST" ] || ! cmp -s "$AUDIO_SVC_TMP" "$AUDIO_SVC_DST"; then
+            echo "  → Installing $AUDIO_SVC_DST"
+            sudo install -m 0644 "$AUDIO_SVC_TMP" "$AUDIO_SVC_DST"
+            SVC_CHANGED=1
+        else
+            echo -e "  ${GREEN}✓${NC} $AUDIO_SVC already up to date"
+        fi
+        if [ "$SVC_CHANGED" = "1" ] || ! systemctl is-enabled --quiet "$AUDIO_SVC"; then
+            sudo systemctl daemon-reload
+            sudo systemctl enable "$AUDIO_SVC" >/dev/null
+            echo -e "  ${GREEN}✓${NC} $AUDIO_SVC enabled"
+        fi
+    else
+        echo -e "  ${YELLOW}Warning: could not fetch $AUDIO_SVC${NC}"
+    fi
+    rm -f "$AUDIO_SVC_TMP"
 
     # --- Bluetooth: Privacy = device in main.conf --------------------------
     BT_CONF="/etc/bluetooth/main.conf"
