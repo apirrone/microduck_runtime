@@ -1286,14 +1286,23 @@ impl Runtime {
             }
             self.start_button_prev_state = start_pressed;
 
-            // Hold Select for 2s → emergency stop + restart from scratch
+            // Hold Select for 2s → stop service and shut down the system
             let select_pressed = self.controller.is_button_pressed("Select");
             if select_pressed {
                 let held_since = self.select_held_since.get_or_insert_with(Instant::now);
                 if held_since.elapsed() >= Duration::from_secs(2) {
-                    println!("🛑 Emergency stop! Disabling motors and exiting (systemd will restart)...");
+                    println!("🛑 Shutdown requested! Disabling motors, stopping service and powering off...");
                     self.motor_controller.set_torque_enable(false).ok();
-                    std::process::exit(1);
+                    // Detach via setsid so the chain survives our own service being stopped.
+                    std::process::Command::new("setsid")
+                        .args([
+                            "sh",
+                            "-c",
+                            "sudo systemctl stop microduck_runtime.service; sudo shutdown 0",
+                        ])
+                        .spawn()
+                        .ok();
+                    std::process::exit(0);
                 }
             } else {
                 self.select_held_since = None;
