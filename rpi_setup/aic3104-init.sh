@@ -85,6 +85,22 @@ i2cset -y 1 0x18 0x02 0x00   # Reg 2 = 00000000
 
 echo "TLV320AIC3104 initialized (PLL + DAC + LINE OUT OK)"
 
+# ----------------------
+# DEFAULT MIXER LEVELS
+# ----------------------
+# The ALSA card may not be registered immediately after the I2C init above —
+# retry a few times if amixer can't find it yet.
+for i in 1 2 3 4 5; do
+    if amixer -c aic3104 info >/dev/null 2>&1; then
+        amixer -c aic3104 sset 'PCM'      127,127 >/dev/null
+        amixer -c aic3104 sset 'Line DAC' 118,118 >/dev/null
+        amixer -c aic3104 sset 'Line'     0,0     >/dev/null
+        echo "TLV320AIC3104 mixer levels set"
+        break
+    fi
+    sleep 1
+done
+
 
 # MIC2L disconnected, MIC2R to right ADC, max gain
 #i2cset -y 1 0x18 0x12 0xF0
