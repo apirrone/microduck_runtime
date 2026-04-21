@@ -358,6 +358,20 @@ struct Args {
     #[arg(long, default_value_t = 5u32)]
     cam_fps: u32,
 
+    /// Manual shutter time in microseconds (passed to rpicam-vid --shutter).
+    /// 0 = use rpicam-vid auto-exposure. Default 5000 µs keeps motion blur
+    /// manageable on a walking biped; paired with --cam-gain to compensate
+    /// for reduced exposure time.
+    #[arg(long, default_value_t = 5000u32)]
+    cam_shutter_us: u32,
+
+    /// Analog gain to pair with --cam-shutter-us (rpicam-vid --gain).
+    /// Ignored unless --cam-shutter-us > 0. Default 8.0 pairs with the
+    /// 5000 µs shutter for typical indoor lighting; push higher for dim
+    /// rooms (at the cost of noise).
+    #[arg(long, default_value_t = 8.0f32)]
+    cam_gain: f32,
+
     /// Enable IMX500 onboard object detection (requires --stream).
     /// Passes --post-process-file to rpicam-vid to run the SSD MobileNetV2
     /// COCO model on-sensor; streams bounding-box JSON to --ball-detect-port.
@@ -956,6 +970,7 @@ impl Runtime {
                 }
                 Some(camera::CameraStream::start(
                     args.cam_width, args.cam_height, args.cam_fps,
+                    args.cam_shutter_us, args.cam_gain,
                     need_detect,
                 ))
             } else {
