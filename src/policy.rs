@@ -44,6 +44,10 @@ pub struct Policy {
     roulade_session: Option<Session>,
     roulade_active: bool,
     roulade_refs: RoulaideRefs,
+    /// Precomputed refs for every timestep of the motion. Populated once on
+    /// activation so the hot path only needs one ONNX call per tick (just for
+    /// the action) instead of two.
+    roulade_ref_table: Vec<RoulaideRefs>,
     fold_mode: Option<PolicyMode>,
     start_time: Instant,
     command_threshold: f64,
@@ -63,6 +67,7 @@ impl Policy {
             roulade_session: None,
             roulade_active: false,
             roulade_refs: RoulaideRefs::default(),
+            roulade_ref_table: Vec::new(),
             fold_mode: None,
             start_time: Instant::now(),
             command_threshold: 0.05,
@@ -90,6 +95,7 @@ impl Policy {
             roulade_session: None,
             roulade_active: false,
             roulade_refs: RoulaideRefs::default(),
+            roulade_ref_table: Vec::new(),
             fold_mode: None,
             start_time: Instant::now(),
             command_threshold: 0.05,
@@ -174,6 +180,107 @@ impl Policy {
     }
 
     pub fn roulade_refs(&self) -> &RoulaideRefs { &self.roulade_refs }
+
+    /// Precomputed refs for the given time_step (clamped into range). Empty
+    /// default returned if the table hasn't been populated.
+    pub fn roulade_refs_at(&self, time_step: i64) -> Option<&RoulaideRefs> {
+        if self.roulade_ref_table.is_empty() {
+            return None;
+        }
+        let last = self.roulade_ref_table.len() as i64 - 1;
+        let idx = time_step.clamp(0, last) as usize;
+        Some(&self.roulade_ref_table[idx])
+    }
+
+    /// Precompute refs for all timesteps 0..num_steps by running the baked
+    /// motion ONNX with a dummy observation — the refs don't depend on obs.
+    /// One-time cost at roulade activation (~num_steps inferences), but then
+    /// the hot path avoids the "bootstrap refs" inference each tick.
+    pub fn precompute_roulade_refs(&mut self, num_steps: i64) -> Result<()> {
+        if num_steps <= 0 { return Ok(()); }
+        let session = self.roulade_session.as_mut()
+            .ok_or_else(|| anyhow::anyhow!("roulade policy not loaded"))?;
+
+        // Build a zero-obs once (observations ignored by the ref outputs).
+        let obs_len = 85usize;
+        let obs_zero = vec![0.0f32; obs_len];
+
+        let mut table: Vec<RoulaideRefs> = Vec::with_capacity(num_steps as usize);
+        for t in 0..num_steps {
+            let obs_value = Value::from_array(([1usize, obs_len], obs_zero.clone()))
+                .map_err(|e| anyhow::anyhow!("obs value: {}", e))?;
+            let ts_value = Value::from_array(([1usize, 1usize], vec![t as f32]))
+                .map_err(|e| anyhow::anyhow!("ts value: {}", e))?;
+            let outputs = session
+                .run(ort::inputs!["obs" => &obs_value, "time_step" => &ts_value])
+                .map_err(|e| anyhow::anyhow!("precompute inference failed: {}", e))?;
+
+            let get = |name: &str| -> Result<(Vec<i64>, Vec<f32>)> {
+                let v = outputs.get(name)
+                    .ok_or_else(|| anyhow::anyhow!("missing output '{}'", name))?;
+                let (shape, data) = v.try_extract_tensor::<f32>()
+                    .map_err(|e| anyhow::anyhow!("extract '{}': {}", name, e))?;
+                Ok((shape.as_ref().to_vec(), data.to_vec()))
+            };
+            let (_, jp) = get("joint_pos")?;
+            let (_, jv) = get("joint_vel")?;
+            let (bp_shape, bp) = get("body_pos_w")?;
+            let (_, bq) = get("body_quat_w")?;
+            let (_, blv) = get("body_lin_vel_w")?;
+            let (_, bav) = get("body_ang_vel_w")?;
+            let num_bodies = if bp_shape.len() == 3 { bp_shape[1] as usize } else { bp.len() / 3 };
+
+            let mut refs = RoulaideRefs::default();
+            for i in 0..14 {
+                refs.joint_pos[i] = jp[i];
+                refs.joint_vel[i] = jv[i];
+            }
+            refs.body_pos_w = bp;
+            refs.body_quat_w = bq;
+            refs.body_lin_vel_w = blv;
+            refs.body_ang_vel_w = bav;
+            refs.num_bodies = num_bodies;
+            refs.initialized = true;
+            table.push(refs);
+        }
+        self.roulade_ref_table = table;
+        Ok(())
+    }
+
+    /// Infer action only — assumes the caller has already built `observation`
+    /// from the precomputed ref table. Single ONNX call per tick.
+    pub fn infer_roulade_action_only(
+        &mut self,
+        observation: &Observation,
+        time_step: i64,
+    ) -> Result<[f32; NUM_MOTORS]> {
+        let session = self.roulade_session.as_mut()
+            .ok_or_else(|| anyhow::anyhow!("roulade policy not loaded"))?;
+        let obs_vec = observation.as_slice().to_vec();
+        let obs_size = obs_vec.len();
+        let obs_value = Value::from_array(([1usize, obs_size], obs_vec))
+            .map_err(|e| anyhow::anyhow!("obs value: {}", e))?;
+        let ts_value = Value::from_array(([1usize, 1usize], vec![time_step as f32]))
+            .map_err(|e| anyhow::anyhow!("ts value: {}", e))?;
+        let outputs = session
+            .run(ort::inputs!["obs" => &obs_value, "time_step" => &ts_value])
+            .map_err(|e| anyhow::anyhow!("Roulade ONNX inference failed: {}", e))?;
+        let v = outputs.get("actions")
+            .ok_or_else(|| anyhow::anyhow!("roulade ONNX missing 'actions'"))?;
+        let (shape, data) = v.try_extract_tensor::<f32>()
+            .map_err(|e| anyhow::anyhow!("extract actions: {}", e))?;
+        let shape = shape.as_ref();
+        if shape.len() != 2 || shape[1] != 14 {
+            return Err(anyhow::anyhow!("Roulade actions shape {:?} != [1,14]", shape));
+        }
+        let mut actions = [0.0f32; NUM_MOTORS];
+        let mut out_idx = 0;
+        for i in 0..NUM_MOTORS {
+            if i == MOUTH_MOTOR_IDX { actions[i] = 0.0; }
+            else { actions[i] = data[out_idx]; out_idx += 1; }
+        }
+        Ok(actions)
+    }
 
     /// Run the tracking ONNX for one step.
     ///

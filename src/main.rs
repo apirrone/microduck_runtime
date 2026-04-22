@@ -144,7 +144,7 @@ struct Args {
     vel_z: f64,
 
     /// Action scale multiplier (scales policy outputs before applying to motors)
-    #[arg(long, default_value_t = 0.6, allow_hyphen_values = true)]
+    #[arg(long, default_value_t = 0.7, allow_hyphen_values = true)]
     action_scale: f64,
 
     /// Wheel velocity scale in motorized-wheel mode (multiplies WHEEL_MAX_VEL).
@@ -1149,6 +1149,15 @@ impl Runtime {
             let x_pressed = self.controller.is_button_pressed("North");
             let x_edge = x_pressed && !self.x_button_prev_state && !self.ground_pick_active;
             if x_edge && self.policy.has_roulade() && !self.roulade_active && !self.jump_active {
+                // Precompute refs for every timestep (one-time cost, then hot
+                // path only does one ONNX call per tick instead of two).
+                let pre_start = Instant::now();
+                if let Err(e) = self.policy.precompute_roulade_refs(self.roulade_steps_total) {
+                    eprintln!("⚠  Roulade ref precompute failed, aborting activation: {}", e);
+                    return Ok(());
+                }
+                println!("◎ Roulade: precomputed {} ref steps in {:.1} ms",
+                    self.roulade_steps_total, pre_start.elapsed().as_secs_f64() * 1000.0);
                 self.roulade_active = true;
                 self.roulade_step = 0;
                 self.roulade_ref_trunk_pos_t0 = None;
@@ -1786,42 +1795,30 @@ impl Runtime {
             }
         } else if self.roulade_active {
             // ── Roulade (motion-tracking) policy ──────────────────────────────
-            // Two-pass per tick: (1) query refs at current step with a dummy obs, then
-            // (2) build the real 85D obs from those refs and run inference for the action.
+            // Single-pass per tick: refs are precomputed at activation, so we
+            // only run the ONNX once per tick to get the action.
             if self.policy_enabled {
                 let t = self.roulade_step;
-                // Pass 1: bootstrap refs for current step. Zero-obs action is discarded.
-                let zero_ref = [0.0f32; 14];
-                let zero_pos_b = [0.0f32; 3];
-                let zero_ori_b = [0.0f32; 6];
-                let dummy_obs = Observation::new_tracking(
-                    &imu_data, &motor_state, &self.last_action, &self.default_positions,
-                    &zero_ref, &zero_ref, &zero_pos_b, &zero_ori_b,
-                );
-                let _ = self.policy.infer_roulade(&dummy_obs, t)
-                    .context("Failed to bootstrap roulade refs")?;
 
-                // Capture reference trunk t0 on first tick (trunk is body_names[0]).
+                // Snapshot refs at current step from the precomputed table.
+                let (ref_joint_pos, ref_joint_vel, trunk_pos_now, trunk_quat_now) = {
+                    let refs = self.policy.roulade_refs_at(t)
+                        .ok_or_else(|| anyhow::anyhow!("roulade ref table empty"))?;
+                    let trunk_pos = if refs.body_pos_w.len() >= 3 {
+                        [refs.body_pos_w[0], refs.body_pos_w[1], refs.body_pos_w[2]]
+                    } else { [0.0; 3] };
+                    let trunk_quat = if refs.body_quat_w.len() >= 4 {
+                        [refs.body_quat_w[0], refs.body_quat_w[1], refs.body_quat_w[2], refs.body_quat_w[3]]
+                    } else { [1.0, 0.0, 0.0, 0.0] };
+                    (refs.joint_pos, refs.joint_vel, trunk_pos, trunk_quat)
+                };
+
+                // Capture reference trunk t0 on first tick.
                 if self.roulade_ref_trunk_pos_t0.is_none() {
-                    let refs = self.policy.roulade_refs();
-                    if refs.body_pos_w.len() >= 3 {
-                        self.roulade_ref_trunk_pos_t0 = Some([
-                            refs.body_pos_w[0], refs.body_pos_w[1], refs.body_pos_w[2],
-                        ]);
-                    }
+                    self.roulade_ref_trunk_pos_t0 = Some(trunk_pos_now);
                 }
-
-                // Read refs for current step from the cache populated by pass 1.
-                let refs = self.policy.roulade_refs().clone();
                 let t0 = self.roulade_ref_trunk_pos_t0.unwrap_or([0.0; 3]);
-                let trunk_pos_now = if refs.body_pos_w.len() >= 3 {
-                    [refs.body_pos_w[0], refs.body_pos_w[1], refs.body_pos_w[2]]
-                } else { [0.0; 3] };
-                let trunk_quat_now = if refs.body_quat_w.len() >= 4 {
-                    [refs.body_quat_w[0], refs.body_quat_w[1], refs.body_quat_w[2], refs.body_quat_w[3]]
-                } else { [1.0, 0.0, 0.0, 0.0] };
 
-                // IMU quat (w,x,y,z) cast to f32.
                 let q_imu = [
                     imu_data.quat[0] as f32, imu_data.quat[1] as f32,
                     imu_data.quat[2] as f32, imu_data.quat[3] as f32,
@@ -1832,10 +1829,9 @@ impl Runtime {
 
                 let track_obs = Observation::new_tracking(
                     &imu_data, &motor_state, &self.last_action, &self.default_positions,
-                    &refs.joint_pos, &refs.joint_vel, &pos_b, &ori_b,
+                    &ref_joint_pos, &ref_joint_vel, &pos_b, &ori_b,
                 );
-                // Pass 2: get the action for this step.
-                self.policy.infer_roulade(&track_obs, t)
+                self.policy.infer_roulade_action_only(&track_obs, t)
                     .context("Failed to run roulade inference")?
             } else {
                 [0.0f32; NUM_MOTORS]
