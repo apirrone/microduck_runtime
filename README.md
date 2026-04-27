@@ -70,6 +70,35 @@ Head offsets are preserved when switching back to walking mode.
 
 **Fall detection**: if the robot is detected as fallen for 0.2s, the policy stops and motors go limp (kP=50). Press Start to recover.
 
+## Maploc — autonomous mapping & navigation
+
+The `--maploc` flag enables 2D ToF-based mapping, MCL localization, and A* path planning, provided by the [`microduck_maploc-rs`](https://github.com/apirrone/microduck_maploc_rs) crate. It runs autonomously: the duck builds an occupancy grid as it moves, localizes against it, and (when given a goal) plans + executes a path.
+
+```bash
+# Silent autonomous mode — duck maps + localizes; goals come from on-board logic.
+microduck_runtime --maploc
+
+# Same plus laptop visualization & click-to-goto.
+microduck_runtime --maploc --stream
+```
+
+`--maploc` is independent of `--stream`. Pairing the two enables the maploc telemetry/goal sockets without affecting the existing 9870 digital-twin protocol.
+
+| Port  | Direction          | Payload                                |
+|-------|--------------------|----------------------------------------|
+| 9874  | duck → laptop      | pose, scan, map blob, planned path     |
+| 9875  | laptop → duck      | goal click `(x, y)` in world frame     |
+
+Map persistence: `/var/lib/microduck/maploc_map.bin` (~26 KB), auto-loaded on start, saved on exit. `--maploc-wipe` starts fresh; `--maploc-map-path` overrides the location.
+
+To view the live map and click goals from the laptop, use `view_remote.py` from [microduck_maploc](../microduck_maploc):
+
+```bash
+uv run --extra sim python -m microduck_maploc.sim.view_remote --host <duck-ip>
+```
+
+ToF hardware: a VL53L5CX driver is the missing piece. The `--maploc` path runs today against `tof::NoopTof` (no measurement updates — pose drifts on odometry alone). Once the sensor lands, the driver in `src/tof.rs` plugs in behind the existing `TofSource` trait.
+
 ## Commands
 
 These commands are available after installing with the curl command : 

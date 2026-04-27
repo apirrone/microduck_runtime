@@ -1,10 +1,12 @@
 mod imu;
+mod maploc;
 mod motor;
 mod observation;
 mod policy;
 mod controller;
 mod odometry;
 mod camera;
+mod tof;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -324,6 +326,30 @@ struct Args {
     #[arg(long, default_value_t = 0.3)]
     legs_low_pass_alpha: f64,
 
+    /// Enable autonomous 2D ToF mapping + MCL localization + planning.
+    /// Independent of --stream: with --maploc alone the duck builds and
+    /// uses its map silently; pair with --stream to also expose
+    /// telemetry + accept goal clicks from a laptop viewer.
+    #[arg(long)]
+    maploc: bool,
+
+    /// TCP port for maploc telemetry (pose / map / scan / path),
+    /// active only with both --maploc and --stream.
+    #[arg(long, default_value_t = 9874)]
+    maploc_stream_port: u16,
+
+    /// TCP port for inbound goal clicks from the viewer.
+    #[arg(long, default_value_t = 9875)]
+    maploc_goal_port: u16,
+
+    /// Path the maploc map persists to (auto-loaded at start, saved on exit).
+    #[arg(long, default_value = "/var/lib/microduck/maploc_map.bin")]
+    maploc_map_path: std::path::PathBuf,
+
+    /// Wipe the saved map at start — build from scratch.
+    #[arg(long)]
+    maploc_wipe: bool,
+
     /// Stream robot state over TCP for digital twin visualization.
     /// Sends 39 × f32 LE (156 bytes/frame):
     ///   [0..3]   IMU quaternion [w, x, y, z]
@@ -567,6 +593,14 @@ struct Runtime {
     last_motor_state: motor::MotorState,
     // Cumulative count of motor read failures (shown in status line)
     read_error_count: u64,
+    /// Optional maploc state (mapping + localization + planning + streaming).
+    /// `None` unless --maploc was passed.
+    maploc: Option<maploc::Maploc>,
+    /// ToF source feeding maploc. `NoopTof` until the VL53L5CX driver
+    /// is wired in — maploc happily predicts on odometry alone.
+    tof_source: Box<dyn tof::TofSource>,
+    /// Wall-clock of the last `maploc.tick()` call (for dt computation).
+    maploc_last_tick: Option<std::time::Instant>,
 }
 
 impl Runtime {
@@ -990,6 +1024,22 @@ impl Runtime {
             odometry: [0.0; 4],
             last_motor_state: motor::MotorState::default(),
             read_error_count: 0,
+            maploc: if args.maploc {
+                let opts = maploc::MaplocOptions {
+                    map_path:    args.maploc_map_path.clone(),
+                    wipe:        args.maploc_wipe,
+                    stream:      args.stream,
+                    stream_port: args.maploc_stream_port,
+                    goal_port:   args.maploc_goal_port,
+                    ..Default::default()
+                };
+                let m = maploc::Maploc::new(opts).context("init maploc")?;
+                println!("Maploc enabled (stream={}, wipe={})",
+                         args.stream, args.maploc_wipe);
+                Some(m)
+            } else { None },
+            tof_source: Box::new(tof::NoopTof),
+            maploc_last_tick: None,
         })
     }
 
@@ -1689,6 +1739,33 @@ impl Runtime {
             self.odometry = [p[0], p[1], p[2], odo.yaw];
         }
 
+        // Maploc tick — predict on odometry, ingest any fresh ToF frame,
+        // drain pending goals, push telemetry. Returns the body-frame
+        // velocity command we should pipe into the locomotion policy
+        // when an auto-drive path is active.
+        if let Some(m) = &mut self.maploc {
+            let now = std::time::Instant::now();
+            let dt = self.maploc_last_tick.map(|t| (now - t).as_secs_f32()).unwrap_or(0.02);
+            self.maploc_last_tick = Some(now);
+            let odom_xy_yaw = (
+                self.odometry[0] as f32,
+                self.odometry[1] as f32,
+                self.odometry[3] as f32,
+            );
+            let cmd = m.tick(odom_xy_yaw, self.tof_source.as_mut(), dt);
+            // Pipe maploc's command into the locomotion velocity input
+            // ONLY if there's an active path AND the brain hasn't sent
+            // a command this tick (manual override / brain wins).
+            if m.has_active_path() && self.brain_command == [0.0; 3] {
+                let vx = cmd.forward / dt.max(1e-3);
+                let wz = cmd.dyaw    / dt.max(1e-3);
+                self.brain_command = [vx as f64, 0.0, wz as f64];
+            }
+            if m.just_finished() {
+                println!("[maploc] arrived at goal");
+            }
+        }
+
         // Current estimation: accumulate running stats at every control step
         if self.estimate_current {
             let total: f64 = motor_state.currents_ma.iter().sum();
@@ -2308,6 +2385,16 @@ impl Runtime {
     /// Shutdown the runtime safely
     fn shutdown(&mut self) -> Result<()> {
         println!("Shutting down runtime...");
+
+        // Persist the maploc map so the next session starts from where we
+        // left off. Failures here are logged, not fatal — we still want
+        // the rest of the shutdown sequence (torque off, etc.) to run.
+        if let Some(m) = &self.maploc {
+            match m.save_map() {
+                Ok(()) => println!("[maploc] map saved"),
+                Err(e) => eprintln!("[maploc] map save failed: {e}"),
+            }
+        }
 
         // Save recorded observations if recording mode is enabled
         if let Some(ref path) = self.record_file {
