@@ -92,6 +92,7 @@ const RADS_PER_SEC_PER_COUNT: f64 = 0.229 * (2.0 * PI / 60.0);
 /// Dynamixel Operating Mode register values
 pub const OPERATING_MODE_VELOCITY: u8 = 1;
 pub const OPERATING_MODE_POSITION: u8 = 3;
+pub const OPERATING_MODE_CURRENT_BASED_POSITION: u8 = 5;
 
 /// Indices within MOTOR_IDS for the two wheel motors (left_ankle=4, right_ankle=14).
 pub const WHEEL_MOTOR_INDICES: [usize; 2] = [4, 14];
@@ -489,6 +490,19 @@ impl MotorController {
             self.set_operating_mode(id, OPERATING_MODE_VELOCITY)?;
             self.controller.write_torque_enable(id, true)
                 .map_err(|e| anyhow::anyhow!("Failed to re-enable torque for wheel motor {}: {}", id, e))?;
+        }
+        Ok(())
+    }
+
+    /// Switch all active motors to current-based position control (Op Mode 5).
+    /// Disables torque per motor → writes mode → re-enables torque.
+    pub fn set_all_motors_current_based_position_mode(&mut self) -> Result<()> {
+        for &(_, id) in &self.active_motors() {
+            self.controller.write_torque_enable(id, false)
+                .map_err(|e| anyhow::anyhow!("Failed to disable torque for motor {}: {}", id, e))?;
+            self.set_operating_mode(id, OPERATING_MODE_CURRENT_BASED_POSITION)?;
+            self.controller.write_torque_enable(id, true)
+                .map_err(|e| anyhow::anyhow!("Failed to re-enable torque for motor {}: {}", id, e))?;
         }
         Ok(())
     }

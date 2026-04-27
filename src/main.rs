@@ -83,6 +83,12 @@ struct Args {
     #[arg(long, default_value_t = 200)]
     kp: u16,
 
+    /// Switch all motors to current-based position control (Operating Mode 5)
+    /// instead of the default position control mode (3). When set, the default
+    /// kP becomes 100 (unless --kp is explicitly overridden).
+    #[arg(long)]
+    current_control: bool,
+
     /// Position I gain for motors
     #[arg(long, default_value_t = 0)]
     ki: u16,
@@ -546,6 +552,7 @@ struct Runtime {
     motorized_wheel_mode: bool,
     motorized_wheel_action_scale: f64,
     invert_wheel: bool,
+    current_control: bool,
     has_standing_policy: bool,
     is_using_standing: bool,
     standing_kp_ratio: f64,
@@ -926,6 +933,7 @@ impl Runtime {
             motorized_wheel_mode: args.motorized_wheel,
             motorized_wheel_action_scale: args.motorized_wheel_action_scale,
             invert_wheel: args.invert_wheel,
+            current_control: args.current_control,
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
             standing_kp_ratio: args.standing_kp_ratio,
@@ -1060,6 +1068,13 @@ impl Runtime {
         // Enable torque on all motors
         self.motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
+
+        // Current-based position control mode: switch all motors to Operating Mode 5
+        if self.current_control {
+            self.motor_controller.set_all_motors_current_based_position_mode()
+                .context("Failed to set motors to current-based position mode")?;
+            println!("✓ All motors set to current-based position control (Operating Mode 5)");
+        }
 
         // Motorized wheel mode: switch ankle motors to velocity control (Op Mode 1)
         if self.motorized_wheel_mode {
@@ -2712,7 +2727,15 @@ async fn main() -> Result<()> {
     println!("=== Microduck Robot Runtime ===\n");
 
     // Parse command line arguments
-    let mut args = Args::parse();
+    let matches = <Args as clap::CommandFactory>::command().get_matches();
+    let kp_explicit = matches.value_source("kp") == Some(clap::parser::ValueSource::CommandLine);
+    let mut args = <Args as clap::FromArgMatches>::from_arg_matches(&matches)?;
+
+    // In current-based position control mode the recommended default kP is 100,
+    // unless the user explicitly overrode --kp.
+    if args.current_control && !kp_explicit {
+        args.kp = 100;
+    }
 
     // Expand ~ in path arguments (clap default_value doesn't get shell expansion)
     let home = std::env::var("HOME").unwrap_or_default();
