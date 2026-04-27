@@ -1069,11 +1069,16 @@ impl Runtime {
         self.motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
 
-        // Current-based position control mode: switch all motors to Operating Mode 5
+        // Current-based position control mode: switch all motors to Operating Mode 5.
+        // Otherwise, force all motors back to plain position control (Operating Mode 3)
+        // in case a previous run left them in mode 5.
         if self.current_control {
             self.motor_controller.set_all_motors_current_based_position_mode()
                 .context("Failed to set motors to current-based position mode")?;
             println!("✓ All motors set to current-based position control (Operating Mode 5)");
+        } else {
+            self.motor_controller.set_all_motors_position_mode()
+                .context("Failed to set motors to position mode")?;
         }
 
         // Motorized wheel mode: switch ankle motors to velocity control (Op Mode 1)

@@ -507,6 +507,19 @@ impl MotorController {
         Ok(())
     }
 
+    /// Switch all active motors to position control (Op Mode 3).
+    /// Disables torque per motor → writes mode → re-enables torque.
+    pub fn set_all_motors_position_mode(&mut self) -> Result<()> {
+        for &(_, id) in &self.active_motors() {
+            self.controller.write_torque_enable(id, false)
+                .map_err(|e| anyhow::anyhow!("Failed to disable torque for motor {}: {}", id, e))?;
+            self.set_operating_mode(id, OPERATING_MODE_POSITION)?;
+            self.controller.write_torque_enable(id, true)
+                .map_err(|e| anyhow::anyhow!("Failed to re-enable torque for motor {}: {}", id, e))?;
+        }
+        Ok(())
+    }
+
     /// Restore the two wheel motors to position control (Op Mode 3).
     /// Disables torque → writes mode → re-enables torque.
     pub fn set_wheel_motors_position_mode(&mut self) -> Result<()> {
