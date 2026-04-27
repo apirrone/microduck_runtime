@@ -1059,19 +1059,9 @@ impl Runtime {
         self.motor_controller.check_and_fix_config()
             .context("Failed to check motor configuration")?;
 
-        // Set PID gains
-        let (kp, ki, kd) = self.pid_gains;
-        println!("Setting PID gains: kP={}, kI={}, kD={}", kp, ki, kd);
-        self.motor_controller.set_pid_gains(kp, ki, kd)
-            .context("Failed to set PID gains")?;
-
-        // Enable torque on all motors
-        self.motor_controller.set_torque_enable(true)
-            .context("Failed to enable motor torque")?;
-
-        // Current-based position control mode: switch all motors to Operating Mode 5.
-        // Otherwise, force all motors back to plain position control (Operating Mode 3)
-        // in case a previous run left them in mode 5.
+        // Set the operating mode BEFORE writing PID gains: writing the
+        // operating_mode EEPROM register resets the position PID gains in RAM
+        // back to firmware defaults, so any kP we wrote earlier would be lost.
         if self.current_control {
             self.motor_controller.set_all_motors_current_based_position_mode()
                 .context("Failed to set motors to current-based position mode")?;
@@ -1080,6 +1070,16 @@ impl Runtime {
             self.motor_controller.set_all_motors_position_mode()
                 .context("Failed to set motors to position mode")?;
         }
+
+        // Set PID gains (Position P/I/D — RAM, applied to whichever mode we're in)
+        let (kp, ki, kd) = self.pid_gains;
+        println!("Setting PID gains: kP={}, kI={}, kD={}", kp, ki, kd);
+        self.motor_controller.set_pid_gains(kp, ki, kd)
+            .context("Failed to set PID gains")?;
+
+        // Enable torque on all motors
+        self.motor_controller.set_torque_enable(true)
+            .context("Failed to enable motor torque")?;
 
         // Motorized wheel mode: switch ankle motors to velocity control (Op Mode 1)
         if self.motorized_wheel_mode {
