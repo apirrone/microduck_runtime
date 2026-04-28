@@ -758,7 +758,7 @@ dependencies = [
 [[package]]
 name = "microduck_maploc"
 version = "0.1.0"
-source = "git+https://github.com/apirrone/microduck_maploc_rs#97b5079c0d9f2106f99ef227337d7778724920fa"
+source = "git+https://github.com/apirrone/microduck_maploc_rs#64c3091e9c473e273510dbd6c62ca371d543c3d8"
 dependencies = [
  "rand",
  "rand_distr",

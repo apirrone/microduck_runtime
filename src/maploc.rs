@@ -15,6 +15,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 
 use microduck_maploc::{
+    accumulator::ScanAccumulator,
     follower::{follow_step, FollowCommand, FollowerState},
     grid::{GridConfig, OccupancyGrid},
     mcl::{Localizer, MclConfig},
@@ -59,11 +60,12 @@ impl Default for MaplocOptions {
 }
 
 pub struct Maploc {
-    grid:      OccupancyGrid,
-    localizer: Localizer,
-    follower:  FollowerState,
-    telemetry: Option<Telemetry>,
-    goals:     Option<GoalServer>,
+    grid:        OccupancyGrid,
+    localizer:   Localizer,
+    accumulator: ScanAccumulator,
+    follower:    FollowerState,
+    telemetry:   Option<Telemetry>,
+    goals:       Option<GoalServer>,
     /// Last (x, y, yaw) we passed to the localizer's `predict`. Used to
     /// compute body-frame deltas from successive odometry readings.
     last_odom: Option<(f32, f32, f32)>,
@@ -111,6 +113,7 @@ impl Maploc {
 
         Ok(Self {
             grid, localizer,
+            accumulator: ScanAccumulator::default(),
             follower: FollowerState::empty(),
             telemetry, goals,
             last_odom: None,
@@ -165,12 +168,38 @@ impl Maploc {
         }
         self.last_odom = Some((ox, oy, oyaw));
 
-        // Measurement update + map ingestion.
+        // Measurement path. Single 45° scans don't disambiguate, so we
+        // never run a per-frame MCL update — beams get tagged with the
+        // localizer's belief at capture and pushed into the accumulator.
+        // Once the buffer covers enough motion / azimuth, run a single
+        // wide-scan update; if the cloud is still spread or the best
+        // hypothesis can't fit, fall back to the field-based global
+        // scan-match (~80–100 ms on Pi). Map ingestion and telemetry
+        // continue every tick.
         let now_s = self.started_at.elapsed().as_secs_f64();
         if let Some(frame) = tof.next_frame(now_s) {
-            self.localizer.update(&self.grid, &frame.angles_body, &frame.ranges);
             self.integrate_scan_into_map(&frame);
-            // Tagged for telemetry.
+            let est = self.localizer.best();
+            self.accumulator.add_scan(now_s, est, &frame.angles_body, &frame.ranges);
+
+            if self.accumulator.ready(now_s) {
+                let drained = self.accumulator.drain();
+                self.localizer.update_accumulated(&self.grid, &drained, est);
+                // "Lost" detection: cloud is dispersed AND/OR best
+                // hypothesis genuinely doesn't fit the wide scan. Could
+                // be a fresh reset, could be a silent kidnap — doesn't
+                // matter, the grid match recovers either way.
+                let resid = self.localizer.last_residual_m();
+                let lost = self.localizer.cloud_spread() > 0.50
+                    || (resid.is_finite() && resid > 0.40);
+                if lost {
+                    let est_after = self.localizer.best();
+                    self.localizer.global_relocalize_field(
+                        &mut self.grid, &drained, est_after,
+                    );
+                }
+            }
+
             if let Some(tel) = &mut self.telemetry {
                 tel.send_scan(&wire::Scan {
                     angles_body: frame.angles_body.clone(),
@@ -206,7 +235,10 @@ impl Maploc {
         // Stream pose (always, when telemetry is up).
         if let Some(tel) = &mut self.telemetry {
             tel.poll_accept();
-            let lock = if self.localizer.position_std() < 0.20
+            // Lock = physical particle dispersion is small AND best
+            // hypothesis explains the scan well. Weighted std collapses
+            // too eagerly; cloud_spread is the honest signal.
+            let lock = if self.localizer.cloud_spread() < 0.20
                 && self.localizer.last_residual_m().is_finite()
                 && self.localizer.last_residual_m() < 0.30
             {
