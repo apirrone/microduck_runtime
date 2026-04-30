@@ -11,7 +11,7 @@ mod tof;
 use anyhow::{Context, Result};
 use clap::Parser;
 use imu::{ImuController, Bno08xController, Bmi088Controller, AnyImuController};
-use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, FOLD_DEFAULT_POSITION, MOUTH_MOTOR_IDX, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE,
+use motor::{MotorController, NUM_MOTORS, DEFAULT_POSITION, FOLD_DEFAULT_POSITION, NEW_LEGS_HYBRID_DEFAULT_POSITION, MOUTH_MOTOR_IDX, MOUTH_MIN_ANGLE, MOUTH_MAX_ANGLE,
             DEFAULT_POSITION_MOTORIZED_WHEEL, WHEEL_MOTOR_INDICES, WHEEL_MAX_VEL, OPERATING_MODE_POSITION};
 use observation::Observation;
 use policy::Policy;
@@ -217,6 +217,11 @@ struct Args {
     /// Roller mode: always use the walking/roller policy, never switch to standing policy
     #[arg(long)]
     roller: bool,
+
+    /// new_legs_hybrid robot variant: same DOFs as microduck but flat-leg default pose.
+    /// Use this when running a policy trained with the new_legs_hybrid config.
+    #[arg(long)]
+    new_legs_hybrid: bool,
 
     /// Fold robot mode: use fold robot STAND default pose, continuous fold/unfold phase cycling.
     /// B button toggles fold cycling. Command becomes [cos(2π·φ), sin(2π·φ), 0].
@@ -848,6 +853,8 @@ impl Runtime {
             default_positions: {
                 let mut p = if args.fold {
                     FOLD_DEFAULT_POSITION
+                } else if args.new_legs_hybrid {
+                    NEW_LEGS_HYBRID_DEFAULT_POSITION
                 } else {
                     DEFAULT_POSITION
                 };

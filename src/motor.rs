@@ -86,6 +86,29 @@ pub const FOLD_DEFAULT_POSITION: [f64; NUM_MOTORS] = [
     0.5236,  // right_ankle
 ];
 
+/// Default position for the new_legs_hybrid robot variant.
+/// Same DOFs as microduck, but the lower body sits flat (all leg joints at 0).
+/// Matches NEW_LEGS_HYBRID_HOME_FRAME in microduck_constants.py.
+pub const NEW_LEGS_HYBRID_DEFAULT_POSITION: [f64; NUM_MOTORS] = [
+    0.0,  // left_hip_yaw
+    0.0,  // left_hip_roll
+    0.0,  // left_hip_pitch
+    0.0,  // left_knee
+    0.0,  // left_ankle
+
+    -0.5, // neck_pitch      (override via --neck-pitch-default)
+    0.5,  // head_pitch      (override via --head-pitch-default)
+    0.0,  // head_yaw
+    0.0,  // head_roll
+    0.0,  // mouth_motor
+
+    0.0,  // right_hip_yaw
+    0.0,  // right_hip_roll
+    0.0,  // right_hip_pitch
+    0.0,  // right_knee
+    0.0,  // right_ankle
+];
+
 /// Conversion factor for velocity: 0.229 RPM per count * (2π / 60) for rad/s
 const RADS_PER_SEC_PER_COUNT: f64 = 0.229 * (2.0 * PI / 60.0);
 
