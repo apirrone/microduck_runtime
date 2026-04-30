@@ -393,12 +393,14 @@ impl MotorController {
     /// Check and correct EEPROM configuration registers for all motors.
     /// Verifies: return_delay_time=0, baud_rate=3 (1 Mbps), homing_offset=0, pwm_slope=255, shutdown=52.
     /// Writes any register that doesn't match. Torque must be disabled before calling.
-    pub fn check_and_fix_config(&mut self) -> Result<()> {
+    /// If `skip_homing_offset` is true, the homing_offset register is left untouched
+    /// (used by robot variants that rely on per-motor calibrated offsets).
+    pub fn check_and_fix_config(&mut self, skip_homing_offset: bool) -> Result<()> {
         let mut total_fixes = 0usize;
 
         let active_ids: Vec<u8> = self.active_motors().into_iter().map(|(_, id)| id).collect();
         for id in active_ids {
-            total_fixes += self.check_and_fix_motor_config(id)
+            total_fixes += self.check_and_fix_motor_config(id, skip_homing_offset)
                 .map_err(|e| anyhow::anyhow!("Motor {}: {}", id, e))?;
         }
 
@@ -411,7 +413,7 @@ impl MotorController {
         Ok(())
     }
 
-    fn check_and_fix_motor_config(&mut self, id: u8) -> Result<usize> {
+    fn check_and_fix_motor_config(&mut self, id: u8, skip_homing_offset: bool) -> Result<usize> {
         let mut fixes = 0usize;
 
         // return_delay_time: 0
@@ -434,14 +436,16 @@ impl MotorController {
             fixes += 1;
         }
 
-        // homing_offset: 0
-        let val = self.controller.read_homing_offset(id)
-            .map_err(|e| anyhow::anyhow!("read homing_offset: {}", e))?[0];
-        if val != 0 {
-            println!("  Motor {}: fixing homing_offset {} -> 0", id, val);
-            self.controller.write_homing_offset(id, 0i32)
-                .map_err(|e| anyhow::anyhow!("write homing_offset: {}", e))?;
-            fixes += 1;
+        // homing_offset: 0 (skipped for variants that ship per-motor calibrated offsets)
+        if !skip_homing_offset {
+            let val = self.controller.read_homing_offset(id)
+                .map_err(|e| anyhow::anyhow!("read homing_offset: {}", e))?[0];
+            if val != 0 {
+                println!("  Motor {}: fixing homing_offset {} -> 0", id, val);
+                self.controller.write_homing_offset(id, 0i32)
+                    .map_err(|e| anyhow::anyhow!("write homing_offset: {}", e))?;
+                fixes += 1;
+            }
         }
 
         // pwm_slope: 255

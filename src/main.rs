@@ -558,6 +558,7 @@ struct Runtime {
     motorized_wheel_action_scale: f64,
     invert_wheel: bool,
     current_control: bool,
+    new_legs_hybrid: bool,
     has_standing_policy: bool,
     is_using_standing: bool,
     standing_kp_ratio: f64,
@@ -941,6 +942,7 @@ impl Runtime {
             motorized_wheel_action_scale: args.motorized_wheel_action_scale,
             invert_wheel: args.invert_wheel,
             current_control: args.current_control,
+            new_legs_hybrid: args.new_legs_hybrid,
             has_standing_policy: args.standing.is_some(),
             is_using_standing: false,
             standing_kp_ratio: args.standing_kp_ratio,
@@ -1063,7 +1065,7 @@ impl Runtime {
         println!("Initializing motors...");
 
         // Check and correct EEPROM configuration (torque must be off)
-        self.motor_controller.check_and_fix_config()
+        self.motor_controller.check_and_fix_config(self.new_legs_hybrid)
             .context("Failed to check motor configuration")?;
 
         // Set the operating mode BEFORE writing PID gains: writing the
