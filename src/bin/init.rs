@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use microduck_runtime::motor::{MotorController, MOTOR_IDS, NUM_MOTORS};
+use microduck_runtime::motor::{MotorController, MOTOR_IDS, NEW_LEGS_HYBRID_DEFAULT_POSITION, NUM_MOTORS};
 use std::time::Duration;
 
 const MOTOR_NAMES: [&str; NUM_MOTORS] = [
@@ -26,6 +26,10 @@ struct Args {
     /// Continuously print current DOF positions instead of initializing
     #[arg(long)]
     watch: bool,
+
+    /// Use the new_legs_hybrid robot variant default pose (flat legs).
+    #[arg(long)]
+    new_legs_hybrid: bool,
 }
 
 fn main() -> Result<()> {
@@ -59,9 +63,16 @@ fn main() -> Result<()> {
         motor_controller.set_torque_enable(true)
             .context("Failed to enable motor torque")?;
 
-        println!("Moving to default pose over 1 second...");
-        motor_controller.interpolate_to_default(Duration::from_secs(1))
-            .context("Failed to interpolate to default position")?;
+        if args.new_legs_hybrid {
+            println!("Moving to new_legs_hybrid default pose over 1 second...");
+            motor_controller
+                .interpolate_to_position(&NEW_LEGS_HYBRID_DEFAULT_POSITION, Duration::from_secs(1))
+                .context("Failed to interpolate to new_legs_hybrid default position")?;
+        } else {
+            println!("Moving to default pose over 1 second...");
+            motor_controller.interpolate_to_default(Duration::from_secs(1))
+                .context("Failed to interpolate to default position")?;
+        }
 
         println!("Motors initialized to default pose.");
     }
